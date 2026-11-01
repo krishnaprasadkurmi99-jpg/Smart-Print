@@ -7,8 +7,7 @@ from urllib.parse import urlparse
 import httpx
 from storage3.exceptions import StorageApiError
 from storage3.utils import StorageException
-from supabase import create_client
-from supabase.lib.client_options import ClientOptions
+from supabase import ClientOptions, create_client
 
 
 class ObjectStorageError(Exception):

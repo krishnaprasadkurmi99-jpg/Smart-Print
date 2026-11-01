@@ -8,6 +8,7 @@ os.environ["SMARTPRINT_ENV"] = "development"
 
 from fastapi import HTTPException
 from storage3.exceptions import StorageApiError
+from supabase import ClientOptions
 
 import main
 from object_storage import (
@@ -105,10 +106,10 @@ class SupabaseStorageTests(unittest.TestCase):
             "https://project.supabase.co",
             "test-key",
         ))
-        self.assertEqual(
-            create_client.call_args.kwargs["options"].storage_client_timeout,
-            25,
-        )
+        options = create_client.call_args.kwargs["options"]
+        self.assertIsInstance(options, ClientOptions)
+        self.assertEqual(options.storage_client_timeout, 25)
+        self.assertIsNotNone(options.storage)
 
     def test_missing_environment_variables_are_rejected(self):
         for missing_name in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"):
