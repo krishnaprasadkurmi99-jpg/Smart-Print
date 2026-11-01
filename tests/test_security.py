@@ -1,6 +1,9 @@
 import json
+import os
 import unittest
 from unittest.mock import patch
+
+os.environ["SMARTPRINT_ENV"] = "development"
 
 import main
 from fastapi import HTTPException

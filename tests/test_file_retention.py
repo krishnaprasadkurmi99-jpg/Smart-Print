@@ -4,6 +4,8 @@ import unittest
 from datetime import datetime
 from unittest.mock import patch
 
+os.environ["SMARTPRINT_ENV"] = "development"
+
 import main
 
 

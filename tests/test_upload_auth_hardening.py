@@ -7,6 +7,8 @@ import time
 import unittest
 from unittest.mock import patch
 
+os.environ["SMARTPRINT_ENV"] = "development"
+
 import pymupdf
 from fastapi import HTTPException, UploadFile
 from starlette.requests import Request

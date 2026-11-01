@@ -64,7 +64,11 @@ AUTH_REGISTER_IP_LIMIT = _positive_int_setting("SMARTPRINT_AUTH_REGISTER_IP_LIMI
 AUTH_REGISTER_WINDOW_SECONDS = _positive_int_setting(
     "SMARTPRINT_AUTH_REGISTER_WINDOW_SECONDS", 60 * 60
 )
-APP_ENV = os.getenv("SMARTPRINT_ENV", "development").lower()
+APP_ENV = os.getenv("SMARTPRINT_ENV", "").strip().lower()
+if APP_ENV not in {"development", "production"}:
+    raise RuntimeError(
+        "SMARTPRINT_ENV must be explicitly set to 'development' or 'production'."
+    )
 ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
@@ -1000,20 +1004,11 @@ def _persist_customer_order(
         else:
             branch_id = branch[0]
 
-        cursor.execute("SELECT customer_id FROM customers WHERE phone = %s AND owner_id = %s", (customer_phone, owner_id))
-        customer = cursor.fetchone()
-        if customer:
-            customer_id = customer[0]
-            cursor.execute(
-                "UPDATE customers SET name = %s, email = %s WHERE customer_id = %s",
-                (customer_name, customer_email, customer_id),
-            )
-        else:
-            cursor.execute(
-                "INSERT INTO customers (name, phone, email, owner_id) VALUES (%s, %s, %s, %s)",
-                (customer_name, customer_phone, customer_email, owner_id),
-            )
-            customer_id = cursor.lastrowid
+        cursor.execute(
+            "INSERT INTO customers (name, phone, email, owner_id) VALUES (%s, %s, %s, %s)",
+            (customer_name, customer_phone, customer_email, owner_id),
+        )
+        customer_id = cursor.lastrowid
 
         order_id = None
         for _ in range(10):

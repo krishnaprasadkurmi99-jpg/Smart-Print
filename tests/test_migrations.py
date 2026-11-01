@@ -4,6 +4,8 @@ import sys
 import unittest
 from unittest.mock import patch
 
+os.environ["SMARTPRINT_ENV"] = "development"
+
 import main
 import migrate
 
@@ -53,6 +55,7 @@ class MigrationConnection:
 class MigrationTests(unittest.TestCase):
     def test_importing_application_does_not_connect_or_run_schema_migrations(self):
         environment = os.environ.copy()
+        environment["SMARTPRINT_ENV"] = "development"
         result = subprocess.run(
             [sys.executable, "-c", "import main"],
             cwd=os.path.dirname(os.path.dirname(__file__)),
@@ -64,6 +67,22 @@ class MigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_application_refuses_to_start_without_explicit_environment_mode(self):
+        environment = os.environ.copy()
+        environment.pop("SMARTPRINT_ENV", None)
+        result = subprocess.run(
+            [sys.executable, "-c", "import main"],
+            cwd=os.path.dirname(os.path.dirname(__file__)),
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SMARTPRINT_ENV must be explicitly set", result.stderr)
 
     def test_migrations_are_additive_and_hash_legacy_passwords(self):
         connection = MigrationConnection()

@@ -1,5 +1,29 @@
 # SmartPrint security operations
 
+## Required deployment mode
+
+The application refuses to start unless `SMARTPRINT_ENV` is explicitly set to
+`development` or `production`. For local development, set
+`SMARTPRINT_ENV=development`. For a deployed service, set
+`SMARTPRINT_ENV=production`; production startup then requires a stable session
+secret, explicit HTTPS origins, and a non-root runtime database account with a
+password. For example, configure the production environment variables through
+the service manager or secret store before starting Uvicorn:
+
+```text
+SMARTPRINT_ENV=production
+SMARTPRINT_DB_HOST=<database-host>
+SMARTPRINT_DB_USER=<least-privilege-runtime-user>
+SMARTPRINT_DB_PASSWORD=<secret-store-value>
+SMARTPRINT_DB_NAME=smart_print
+SMARTPRINT_SESSION_SECRET=<secret-store-value>
+SMARTPRINT_ALLOWED_ORIGINS=https://<public-application-host>
+```
+
+Do not use the example placeholders as literal values. The application rejects
+an omitted or unsupported mode rather than silently selecting development
+defaults.
+
 ## Upload limits and reverse proxy
 
 The application applies these defaults to both `POST /upload/` and
@@ -58,6 +82,11 @@ authentication, rate-limit rejections, upload-limit violations, and saturated
 PDF processing. Forward application logs to the existing protected log
 aggregation system. Do not add request bodies, passwords, session/tracking
 tokens, or document content to logs.
+
+Public order contact details are unverified input. Each public order receives
+a separate customer record; a submitted phone number is not used to access or
+modify a previously stored customer record. Add a verified contact flow before
+associating public orders with an existing customer identity.
 
 ## Database provisioning and migrations
 
