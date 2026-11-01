@@ -12,3 +12,6 @@ qrcodes/*
 .vscode/
 
 PRODUCTION-READINESS-AUDIT.md
+# Aiven CA certificate
+certificates/
+*.pem

@@ -13,24 +13,42 @@ import re
 import logging
 import tempfile
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import List
+from datetime import datetime, timedelta, timezone
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable, List
 import pymupdf
-from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, Form, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Request
+from starlette.datastructures import UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, Field
 import mysql.connector
 import qrcode
 from io import BytesIO
 import asyncio
 from document_intelligence import analyze_files, analyze_pdf
+from object_storage import (
+    ObjectNotFoundError,
+    ObjectStorageError,
+    SupabaseObjectStorage,
+)
 from upload_security import UploadRequestSizeLimitMiddleware
 
 app = FastAPI(title="Smart Print Shop Management System")
 logger = logging.getLogger(__name__)
+
+
+@app.exception_handler(ObjectStorageError)
+async def handle_object_storage_error(request: Request, error: ObjectStorageError):
+    status_code = 404 if isinstance(error, ObjectNotFoundError) else 503
+    detail = (
+        "The requested document is no longer available."
+        if status_code == 404
+        else "Document storage is temporarily unavailable."
+    )
+    logger.error("Object storage request failed; method=%s", request.method)
+    return JSONResponse(status_code=status_code, content={"detail": detail})
 
 
 def _positive_int_setting(name: str, default: int) -> int:
@@ -54,6 +72,11 @@ PDF_PROCESSING_MAX_CONCURRENT = _positive_int_setting(
 PDF_PROCESSING_QUEUE_TIMEOUT = _positive_int_setting(
     "SMARTPRINT_PDF_QUEUE_TIMEOUT_SECONDS", 5
 )
+UPLOAD_INTENT_TTL_SECONDS = _positive_int_setting(
+    "SMARTPRINT_UPLOAD_INTENT_TTL_SECONDS", 1800
+)
+if UPLOAD_INTENT_TTL_SECONDS > 3600:
+    raise RuntimeError("SMARTPRINT_UPLOAD_INTENT_TTL_SECONDS cannot exceed 3600.")
 PDF_PROCESSING_SEMAPHORE = asyncio.Semaphore(PDF_PROCESSING_MAX_CONCURRENT)
 AUTH_RATE_WINDOW_SECONDS = _positive_int_setting(
     "SMARTPRINT_AUTH_RATE_WINDOW_SECONDS", 15 * 60
@@ -98,8 +121,6 @@ app.add_middleware(
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 QRCODE_DIR = os.path.join(os.path.dirname(__file__), "qrcodes")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(QRCODE_DIR, exist_ok=True)
 
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "frontend", "dist")
 FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
@@ -111,6 +132,14 @@ DB_PASSWORD = os.getenv("SMARTPRINT_DB_PASSWORD", "")
 DB_NAME = os.getenv("SMARTPRINT_DB_NAME", "smart_print")
 if not re.fullmatch(r"[A-Za-z0-9_]+", DB_NAME):
     raise RuntimeError("SMARTPRINT_DB_NAME may contain only letters, numbers, and underscores.")
+STORAGE_BACKEND = os.getenv(
+    "SMARTPRINT_STORAGE_BACKEND",
+    "supabase" if APP_ENV == "production" else "local",
+).strip().lower()
+if STORAGE_BACKEND not in {"local", "supabase"}:
+    raise RuntimeError("SMARTPRINT_STORAGE_BACKEND must be 'local' or 'supabase'.")
+if APP_ENV == "production" and STORAGE_BACKEND != "supabase":
+    raise RuntimeError("Production requires SMARTPRINT_STORAGE_BACKEND=supabase.")
 if APP_ENV == "production" and (
     not DB_PASSWORD
     or not os.getenv("SMARTPRINT_DB_HOST")
@@ -118,6 +147,11 @@ if APP_ENV == "production" and (
     or DB_USER.lower() == "root"
 ):
     raise RuntimeError("Configure a non-root production database user, host, and password.")
+OBJECT_STORAGE = (
+    SupabaseObjectStorage.from_environment()
+    if STORAGE_BACKEND == "supabase"
+    else None
+)
 SESSION_SECRET = os.getenv("SMARTPRINT_SESSION_SECRET")
 if APP_ENV == "production" and not SESSION_SECRET:
     raise RuntimeError("SMARTPRINT_SESSION_SECRET must be set in production.")
@@ -150,6 +184,94 @@ def get_db_connection():
         user=DB_USER,
         password=DB_PASSWORD,
         database=DB_NAME,
+        ssl_ca=os.getenv("SMARTPRINT_DB_SSL_CA"),
+        ssl_verify_cert=True,
+        ssl_verify_identity=True,
+    )
+
+
+def _local_storage_path(key: str) -> str:
+    key_path = PurePosixPath(key)
+    if (
+        not key
+        or key_path.is_absolute()
+        or "\\" in key
+        or any(part in {"", ".", ".."} for part in key.split("/"))
+    ):
+        raise ValueError("Invalid local storage key.")
+    if key_path.parts[0] == "qrcodes":
+        if len(key_path.parts) != 2:
+            raise ValueError("Invalid QR storage key.")
+        root = QRCODE_DIR
+    elif len(key_path.parts) == 1:
+        root = UPLOAD_DIR
+    else:
+        raise ValueError("Invalid local storage key.")
+    return os.path.join(root, *key_path.parts[-1:])
+
+
+def _storage_put_file(source: str, key: str, content_type: str = "application/pdf") -> None:
+    if OBJECT_STORAGE:
+        OBJECT_STORAGE.upload_file(source, key, content_type)
+        return
+    destination = _local_storage_path(key)
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    shutil.copyfile(source, destination)
+
+
+def _storage_put_bytes(data: bytes, key: str, content_type: str) -> None:
+    if OBJECT_STORAGE:
+        OBJECT_STORAGE.put_bytes(data, key, content_type)
+        return
+    destination = _local_storage_path(key)
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    with open(destination, "wb") as target:
+        target.write(data)
+
+
+def _storage_copy(source_key: str, destination_key: str) -> None:
+    if OBJECT_STORAGE:
+        OBJECT_STORAGE.copy(source_key, destination_key)
+        return
+    source = _local_storage_path(source_key)
+    destination = _local_storage_path(destination_key)
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    shutil.copyfile(source, destination)
+
+
+def _storage_download(key: str, destination: str) -> None:
+    if OBJECT_STORAGE:
+        OBJECT_STORAGE.download_file(key, destination)
+        return
+    shutil.copyfile(_local_storage_path(key), destination)
+
+
+def _storage_exists(key: str) -> bool:
+    if OBJECT_STORAGE:
+        return OBJECT_STORAGE.exists(key)
+    return os.path.isfile(_local_storage_path(key))
+
+
+def _storage_delete(key: str) -> bool:
+    if OBJECT_STORAGE:
+        OBJECT_STORAGE.delete(key)
+        return True
+    try:
+        os.remove(_local_storage_path(key))
+    except FileNotFoundError:
+        return True
+    return True
+
+
+def _storage_file_response(key: str, filename: str, media_type: str):
+    if OBJECT_STORAGE:
+        url = OBJECT_STORAGE.presign_download(key, filename, media_type)
+        return RedirectResponse(url, status_code=307, headers={"Cache-Control": "no-store"})
+    return FileResponse(
+        _local_storage_path(key),
+        media_type=media_type,
+        filename=filename,
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -288,6 +410,62 @@ def _log_upload_limit(request: Request, reason: str) -> None:
     )
 
 
+def _safe_upload_name(filename: str) -> str:
+    name = filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if not name or len(name) > 255 or not name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only valid PDF filenames are accepted.")
+    if any(ord(character) < 32 for character in name):
+        raise HTTPException(status_code=400, detail="The filename contains unsupported characters.")
+    return name
+
+
+def _upload_intent_hash(token: str) -> str:
+    if not token or len(token) > 128 or not re.fullmatch(r"[A-Za-z0-9_-]+", token):
+        raise HTTPException(status_code=400, detail="The upload session is invalid or expired.")
+    return hashlib.sha256(token.encode("ascii")).hexdigest()
+
+
+async def _run_thread_to_completion(function: Callable[..., Any], *args: Any) -> Any:
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        except Exception:
+            logger.exception("A storage operation failed while its request was being cancelled.")
+        raise
+
+
+def _load_upload_intent(token: str) -> tuple[str, list[dict]]:
+    if OBJECT_STORAGE is None:
+        raise HTTPException(status_code=404, detail="Direct uploads are not enabled.")
+    intent_hash = _upload_intent_hash(token)
+    db = get_db_connection()
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT manifest_json
+            FROM upload_intents
+            WHERE intent_hash = %s
+              AND expires_at > UTC_TIMESTAMP()
+              AND consumed_at IS NULL
+            """,
+            (intent_hash,),
+        )
+        intent = cursor.fetchone()
+        if not intent:
+            raise HTTPException(status_code=400, detail="The upload session is invalid or expired.")
+        manifest = json.loads(intent["manifest_json"])
+        if not isinstance(manifest, list) or not manifest:
+            raise HTTPException(status_code=400, detail="The upload session is invalid or expired.")
+        return intent_hash, manifest
+    finally:
+        cursor.close()
+        db.close()
+
+
 async def _stage_pdf_uploads(
     files: list[UploadFile],
     working_directory: str,
@@ -302,9 +480,7 @@ async def _stage_pdf_uploads(
                 detail="The upload contains more files than the configured limit.",
             )
         for upload in files:
-            original_name = Path(upload.filename or "document.pdf").name
-            if not original_name.lower().endswith(".pdf"):
-                raise HTTPException(status_code=400, detail="Only PDF documents can be uploaded.")
+            original_name = _safe_upload_name(upload.filename or "")
             temporary_path = os.path.join(working_directory, f"{uuid.uuid4().hex}.pdf")
             file_size = 0
             with open(temporary_path, "xb") as destination:
@@ -328,15 +504,7 @@ async def _stage_pdf_uploads(
 
 
 @asynccontextmanager
-async def _analyzed_pdf_uploads(files: list[UploadFile], request: Request):
-    if len(files) > MAX_UPLOAD_FILES:
-        _log_upload_limit(request, "file_count")
-        for upload in files:
-            await upload.close()
-        raise HTTPException(
-            status_code=413,
-            detail="The upload contains more files than the configured limit.",
-        )
+async def _pdf_analysis_slot(staged_files: list[tuple[str, str]], request: Request):
     try:
         await asyncio.wait_for(
             PDF_PROCESSING_SEMAPHORE.acquire(),
@@ -347,55 +515,154 @@ async def _analyzed_pdf_uploads(files: list[UploadFile], request: Request):
             "security_event event=pdf_processing_capacity_exceeded client_ip=%s",
             _client_ip(request),
         )
-        for upload in files:
-            await upload.close()
         raise HTTPException(
             status_code=503,
             detail="Document analysis is busy. Please retry shortly.",
             headers={"Retry-After": str(PDF_PROCESSING_QUEUE_TIMEOUT)},
         ) from None
-    except asyncio.CancelledError:
-        for upload in files:
-            await upload.close()
-        raise
-
     try:
-        with tempfile.TemporaryDirectory(prefix="smartprint-pdf-") as working_directory:
-            staged_files = await _stage_pdf_uploads(files, working_directory, request)
-            try:
-                analysis_task = asyncio.create_task(
-                    asyncio.to_thread(analyze_files, staged_files)
-                )
-                try:
-                    analyses = await asyncio.shield(analysis_task)
-                except asyncio.CancelledError:
-                    await analysis_task
-                    raise
-            except Exception:
-                logger.warning(
-                    "security_event event=pdf_analysis_rejected client_ip=%s",
-                    _client_ip(request),
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail="One or more PDF documents could not be analyzed.",
-                ) from None
-            yield staged_files, analyses
+        analysis_task = asyncio.create_task(asyncio.to_thread(analyze_files, staged_files))
+        try:
+            analyses = await asyncio.shield(analysis_task)
+        except asyncio.CancelledError:
+            await analysis_task
+            raise
+        except Exception:
+            logger.warning(
+                "security_event event=pdf_analysis_rejected client_ip=%s",
+                _client_ip(request),
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="One or more PDF documents could not be analyzed.",
+            ) from None
+        yield analyses
     finally:
-        for upload in files:
-            await upload.close()
         PDF_PROCESSING_SEMAPHORE.release()
 
 
-def _delete_upload_file(filename: str) -> bool:
-    if not filename or filename in {".", ".."} or "/" in filename or "\\" in filename:
-        return False
-    upload_directory = os.path.abspath(UPLOAD_DIR)
-    file_path = os.path.abspath(os.path.join(upload_directory, filename))
-    if os.path.commonpath([upload_directory, file_path]) != upload_directory:
-        return False
+@asynccontextmanager
+async def _analyzed_pdf_uploads(files: list[UploadFile], request: Request):
+    if len(files) > MAX_UPLOAD_FILES:
+        _log_upload_limit(request, "file_count")
+        for upload in files:
+            await upload.close()
+        raise HTTPException(
+            status_code=413,
+            detail="The upload contains more files than the configured limit.",
+        )
     try:
-        os.remove(file_path)
+        with tempfile.TemporaryDirectory(prefix="smartprint-pdf-") as working_directory:
+            staged_files = await _stage_pdf_uploads(files, working_directory, request)
+            async with _pdf_analysis_slot(staged_files, request) as analyses:
+                yield staged_files, analyses
+    finally:
+        for upload in files:
+            await upload.close()
+
+
+@asynccontextmanager
+async def _analyzed_object_uploads(token: str, request: Request):
+    intent_hash, manifest = _load_upload_intent(token)
+    if len(manifest) > MAX_UPLOAD_FILES:
+        raise HTTPException(status_code=400, detail="The upload session is invalid or expired.")
+    with tempfile.TemporaryDirectory(prefix="smartprint-pdf-") as working_directory:
+        validated_manifest = []
+        declared_total_bytes = 0
+        for item in manifest:
+            name = _safe_upload_name(str(item["filename"]))
+            size = int(item["size"])
+            key = SupabaseObjectStorage.validate_key(str(item["key"]))
+            if size < 1 or size > MAX_UPLOAD_FILE_BYTES or not key.startswith("staging/"):
+                raise HTTPException(status_code=400, detail="The upload session is invalid or expired.")
+            declared_total_bytes += size
+            if declared_total_bytes > MAX_UPLOAD_REQUEST_BYTES:
+                _log_upload_limit(request, "total_file_size")
+                raise HTTPException(status_code=413, detail="The upload exceeds the configured total size limit.")
+            validated_manifest.append((name, key, size))
+
+        actual_sizes = []
+        for _, key, _ in validated_manifest:
+            try:
+                metadata = await _run_thread_to_completion(OBJECT_STORAGE.head, key)
+            except ObjectNotFoundError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="An uploaded PDF is incomplete or invalid.",
+                ) from None
+            except ObjectStorageError:
+                logger.error("Could not validate a staged document in object storage.")
+                raise HTTPException(status_code=503, detail="Document storage is temporarily unavailable.") from None
+            actual_size = int(metadata.get("ContentLength", -1))
+            if actual_size > MAX_UPLOAD_FILE_BYTES:
+                _log_upload_limit(request, "per_file_size")
+                raise HTTPException(status_code=413, detail="A PDF exceeds the configured per-file size limit.")
+            actual_sizes.append(actual_size)
+
+        if sum(actual_sizes) > MAX_UPLOAD_REQUEST_BYTES:
+            _log_upload_limit(request, "total_file_size")
+            raise HTTPException(status_code=413, detail="The upload exceeds the configured total size limit.")
+        if any(
+            actual_size != item[2]
+            for actual_size, item in zip(actual_sizes, validated_manifest)
+        ):
+            raise HTTPException(status_code=400, detail="An uploaded PDF is incomplete or invalid.")
+
+        staged_files = []
+        for (name, key, size), actual_size in zip(validated_manifest, actual_sizes):
+            staged_path = os.path.join(working_directory, f"{uuid.uuid4().hex}.pdf")
+            try:
+                await _run_thread_to_completion(OBJECT_STORAGE.download_file, key, staged_path)
+            except ObjectStorageError:
+                logger.error("Could not stage an uploaded document from object storage.")
+                raise HTTPException(status_code=503, detail="Document storage is temporarily unavailable.") from None
+            if os.path.getsize(staged_path) != size:
+                raise HTTPException(status_code=400, detail="An uploaded PDF is incomplete or invalid.")
+            staged_files.append((name, staged_path))
+
+        async with _pdf_analysis_slot(staged_files, request) as analyses:
+            yield staged_files, analyses, intent_hash, manifest
+
+
+@asynccontextmanager
+async def _analyzed_request_uploads(request: Request):
+    content_type = request.headers.get("content-type", "").lower()
+    if content_type.startswith("application/json"):
+        try:
+            body = await request.json()
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="The upload request is invalid.") from error
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="The upload request is invalid.")
+        token = body.get("upload_token")
+        if not isinstance(token, str):
+            raise HTTPException(status_code=400, detail="The upload session is invalid or expired.")
+        async with _analyzed_object_uploads(token, request) as (
+            staged_files,
+            analyses,
+            intent_hash,
+            manifest,
+        ):
+            yield staged_files, analyses, intent_hash, manifest, body
+        return
+
+    form = await request.form()
+    files = form.getlist("files")
+    uploads = [upload for upload in files if isinstance(upload, UploadFile)]
+    if not uploads or len(uploads) != len(files):
+        raise HTTPException(status_code=400, detail="Choose at least one PDF to upload.")
+    async with _analyzed_pdf_uploads(uploads, request) as (staged_files, analyses):
+        yield staged_files, analyses, None, None, form
+
+
+def _delete_upload_file(filename: str) -> bool:
+    try:
+        if OBJECT_STORAGE:
+            OBJECT_STORAGE.delete(filename)
+        else:
+            _storage_delete(filename)
+    except ValueError:
+        return False
     except FileNotFoundError:
         return True
     except OSError:
@@ -735,6 +1002,19 @@ class PrintSettingsConfirmation(BaseModel):
     owner_id: int
 
 
+class PresignUploadFile(BaseModel):
+    filename: str
+    size: int = Field(gt=0)
+
+
+class PresignUploadRequest(BaseModel):
+    files: list[PresignUploadFile] = Field(min_length=1, max_length=MAX_UPLOAD_FILES)
+
+
+class UploadIntentRequest(BaseModel):
+    upload_token: str
+
+
 def _validated_print_settings(value: str | dict | None) -> dict:
     if isinstance(value, str):
         try:
@@ -790,8 +1070,10 @@ def _qr_for_order(order_id: str, pickup_pin: str, owner_id: int, cursor) -> None
     qr.add_data(qr_data)
     qr.make(fit=True)
     image = qr.make_image(fill_color="black", back_color="white")
-    qr_path = os.path.join(QRCODE_DIR, f"{order_id}.png")
-    image.save(qr_path)
+    qr_path = f"qrcodes/{order_id}.png"
+    image_buffer = BytesIO()
+    image.save(image_buffer, format="PNG")
+    _storage_put_bytes(image_buffer.getvalue(), qr_path, "image/png")
     cursor.execute(
         "INSERT INTO qr_codes (order_id, owner_id, qr_data, qr_image_path) VALUES (%s, %s, %s, %s)",
         (order_id, owner_id, qr_data, qr_path),
@@ -918,10 +1200,8 @@ def logout_owner():
     return response
 
 @app.post("/analyze/")
-async def analyze_only_endpoint(request: Request, files: List[UploadFile] = File(...)):
-    if not files:
-        raise HTTPException(status_code=400, detail="Choose at least one PDF to analyze.")
-    async with _analyzed_pdf_uploads(files, request) as (_, documents):
+async def analyze_only_endpoint(request: Request):
+    async with _analyzed_request_uploads(request) as (_, documents, _, _, _):
         total_pages = sum(item["total_pages"] for item in documents)
         bw_pages = sum(item["bw_pages"] for item in documents)
         color_pages = sum(item["color_pages"] for item in documents)
@@ -941,28 +1221,112 @@ async def analyze_only_endpoint(request: Request, files: List[UploadFile] = File
             "recommendations": recommendations,
         }
 
-@app.post("/upload/")
-async def upload_and_save_endpoint(request: Request, files: List[UploadFile] = File(...), payment_method: str = Form("UPI"), force_bw: str = Form("false"), 
-                                   customer_name: str = Form(""), customer_phone: str = Form(""), customer_email: str = Form(""),
-                                   owner_id: int = Form(...), print_settings: str = Form("{}")):
-    if not files:
-        raise HTTPException(status_code=400, detail="Choose at least one PDF to upload.")
-    is_forced = force_bw.lower() == "true"
-    settings = _validated_print_settings(print_settings)
-    if is_forced:
-        settings["color_mode"] = "B&W"
 
-    async with _analyzed_pdf_uploads(files, request) as (staged_files, analyses):
+@app.post("/upload/presign")
+async def presign_customer_upload(payload: PresignUploadRequest, request: Request):
+    if OBJECT_STORAGE is None:
+        raise HTTPException(status_code=404, detail="Direct uploads are not enabled.")
+    manifest = []
+    total_bytes = 0
+    for item in payload.files:
+        filename = _safe_upload_name(item.filename)
+        if item.size > MAX_UPLOAD_FILE_BYTES:
+            _log_upload_limit(request, "per_file_size")
+            raise HTTPException(status_code=413, detail="A PDF exceeds the configured per-file size limit.")
+        total_bytes += item.size
+        if total_bytes > MAX_UPLOAD_REQUEST_BYTES:
+            _log_upload_limit(request, "total_file_size")
+            raise HTTPException(status_code=413, detail="The upload exceeds the configured total size limit.")
+        manifest.append({
+            "filename": filename,
+            "key": f"staging/{uuid.uuid4().hex}",
+            "size": item.size,
+        })
+
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
+        seconds=UPLOAD_INTENT_TTL_SECONDS
+    )
+    db = get_db_connection()
+    cursor = db.cursor()
+    try:
+        cursor.execute("DELETE FROM upload_intents WHERE expires_at <= UTC_TIMESTAMP()")
+        cursor.execute(
+            """
+            INSERT INTO upload_intents (intent_hash, manifest_json, expires_at)
+            VALUES (%s, %s, %s)
+            """,
+            (_upload_intent_hash(token), json.dumps(manifest), expires_at),
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        cursor.close()
+        db.close()
+
+    try:
+        uploads = [{
+            "filename": item["filename"],
+            "size": item["size"],
+            "url": OBJECT_STORAGE.presign_upload(item["key"], "application/pdf", item["size"]),
+        } for item in manifest]
+    except ObjectStorageError:
+        logger.error("Could not create signed document upload URLs.")
+        raise HTTPException(status_code=503, detail="Document storage is temporarily unavailable.") from None
+    return {
+        "upload_token": token,
+        "expires_in": UPLOAD_INTENT_TTL_SECONDS,
+        "files": uploads,
+    }
+
+
+@app.post("/upload/")
+async def upload_and_save_endpoint(request: Request):
+    async with _analyzed_request_uploads(request) as (
+        staged_files,
+        analyses,
+        intent_hash,
+        manifest,
+        payload,
+    ):
+        def field(name: str, default: str = "") -> str:
+            value = payload.get(name, default)
+            if not isinstance(value, str):
+                raise HTTPException(status_code=400, detail=f"Invalid {name} value.")
+            return value
+
+        owner_value = payload.get("owner_id")
+        if isinstance(owner_value, bool) or not isinstance(owner_value, (str, int)):
+            raise HTTPException(status_code=400, detail="A valid shop is required.")
+        try:
+            owner_id = int(owner_value)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="A valid shop is required.") from error
+        payment_method = field("payment_method", "UPI")
+        force_value = payload.get("force_bw", "false")
+        if not isinstance(force_value, (str, bool)):
+            raise HTTPException(status_code=400, detail="Invalid force_bw value.")
+        is_forced = force_value is True or (
+            isinstance(force_value, str) and force_value.lower() == "true"
+        )
+        settings_value = payload.get("print_settings", "{}")
+        settings = _validated_print_settings(settings_value)
+        if is_forced:
+            settings["color_mode"] = "B&W"
         return _persist_customer_order(
             staged_files,
             analyses,
             payment_method=payment_method,
             is_forced=is_forced,
-            customer_name=customer_name,
-            customer_phone=customer_phone,
-            customer_email=customer_email,
+            customer_name=field("customer_name"),
+            customer_phone=field("customer_phone"),
+            customer_email=field("customer_email"),
             owner_id=owner_id,
             settings=settings,
+            upload_intent_hash=intent_hash,
+            upload_manifest=manifest,
         )
 
 
@@ -977,6 +1341,8 @@ def _persist_customer_order(
     customer_email: str,
     owner_id: int,
     settings: dict,
+    upload_intent_hash: str | None = None,
+    upload_manifest: list[dict] | None = None,
 ) -> dict:
     total_pages = sum(item["total_pages"] for item in analyses)
     classified_bw = sum(item["bw_pages"] for item in analyses)
@@ -990,6 +1356,20 @@ def _persist_customer_order(
     saved_paths = []
     created_qr_path = None
     try:
+        if upload_intent_hash:
+            cursor.execute(
+                """
+                UPDATE upload_intents
+                SET consumed_at = UTC_TIMESTAMP()
+                WHERE intent_hash = %s
+                  AND expires_at > UTC_TIMESTAMP()
+                  AND consumed_at IS NULL
+                """,
+                (upload_intent_hash,),
+            )
+            if cursor.rowcount != 1:
+                raise HTTPException(status_code=409, detail="The upload session has already been used or expired.")
+
         cursor.execute("SELECT owner_id FROM shop_owners WHERE owner_id = %s", (owner_id,))
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail="Shop owner not found.")
@@ -1035,11 +1415,12 @@ def _persist_customer_order(
             (order_id, owner_id, "Order Submitted", "Waiting"),
         )
 
+        if upload_manifest is not None and len(upload_manifest) != len(staged_files):
+            raise HTTPException(status_code=400, detail="The upload session is invalid or expired.")
         for (original_name, temporary_path), analysis in zip(staged_files, analyses):
             storage_name = f"{uuid.uuid4().hex}.pdf"
-            storage_path = os.path.join(UPLOAD_DIR, storage_name)
-            shutil.copyfile(temporary_path, storage_path)
-            saved_paths.append(storage_path)
+            _storage_put_file(temporary_path, storage_name)
+            saved_paths.append(storage_name)
             cursor.execute("""
                 INSERT INTO order_documents (
                     order_id, original_filename, storage_filename, sha256,
@@ -1059,20 +1440,32 @@ def _persist_customer_order(
             order_id, settings["paper_size"], settings["orientation"], settings["color_mode"],
             settings["duplex"], settings["quality"], settings["copies"],
         ))
-        created_qr_path = os.path.join(QRCODE_DIR, f"{order_id}.png")
+        created_qr_path = f"qrcodes/{order_id}.png"
         _qr_for_order(order_id, pickup_pin, owner_id, cursor)
         db.commit()
     except Exception:
         db.rollback()
         for saved_path in saved_paths:
-            if os.path.exists(saved_path):
-                os.remove(saved_path)
-        if created_qr_path and os.path.exists(created_qr_path):
-            os.remove(created_qr_path)
+            try:
+                _storage_delete(saved_path)
+            except Exception:
+                logger.exception("Could not remove a document after order creation failed.")
+        if created_qr_path:
+            try:
+                _storage_delete(created_qr_path)
+            except Exception:
+                logger.exception("Could not remove a QR image after order creation failed.")
         raise
     finally:
         cursor.close()
         db.close()
+
+    if upload_manifest is not None:
+        for item in upload_manifest:
+            try:
+                _storage_delete(SupabaseObjectStorage.validate_key(str(item["key"])))
+            except Exception:
+                logger.exception("Could not remove a staged document after order creation.")
 
     asyncio.create_task(manager.broadcast({
         "type": "new_order", "owner_id": owner_id, "order_id": order_id, "status": "Waiting",
@@ -1267,14 +1660,13 @@ def get_order_documents(order_id: str, request: Request):
             )
             has_document_records = cursor.fetchone()["document_count"] > 0
             legacy_name = os.path.basename(order["filename"] or "")
-            legacy_path = os.path.join(UPLOAD_DIR, legacy_name)
             result = [{
                 "filename": legacy_name,
                 "url": f"/files/legacy/{order_id}",
                 "total_pages": None,
                 "bw_pages": None,
                 "color_pages": None,
-            }] if not has_document_records and legacy_name and os.path.isfile(legacy_path) else []
+            }] if not has_document_records and legacy_name and _storage_exists(legacy_name) else []
         return {"status": "success", "data": result}
     finally:
         cursor.close()
@@ -1297,13 +1689,14 @@ def download_order_document(order_id: str, document_id: int, request: Request):
         document = cursor.fetchone()
         if not document:
             raise HTTPException(status_code=404, detail="Document not found for this shop.")
-        stored_name = os.path.basename(document["storage_filename"])
-        file_path = os.path.abspath(os.path.join(UPLOAD_DIR, stored_name))
-        if os.path.commonpath([os.path.abspath(UPLOAD_DIR), file_path]) != os.path.abspath(UPLOAD_DIR):
-            raise HTTPException(status_code=404, detail="Document not found.")
-        if not os.path.isfile(file_path):
+        stored_name = document["storage_filename"]
+        if not _storage_exists(stored_name):
             raise HTTPException(status_code=404, detail="The original document is no longer available.")
-        return FileResponse(file_path, media_type="application/pdf", filename=Path(document["original_filename"]).name)
+        return _storage_file_response(
+            stored_name,
+            Path(document["original_filename"]).name,
+            "application/pdf",
+        )
     finally:
         cursor.close()
         db.close()
@@ -1323,12 +1716,11 @@ def download_legacy_order_document(order_id: str, request: Request):
         if not order:
             raise HTTPException(status_code=404, detail="Order not found for this shop.")
         safe_name = os.path.basename(order["filename"] or "")
-        file_path = os.path.abspath(os.path.join(UPLOAD_DIR, safe_name))
-        if not safe_name or os.path.commonpath([os.path.abspath(UPLOAD_DIR), file_path]) != os.path.abspath(UPLOAD_DIR):
+        if not safe_name:
             raise HTTPException(status_code=404, detail="Document not found.")
-        if not os.path.isfile(file_path):
+        if not _storage_exists(safe_name):
             raise HTTPException(status_code=404, detail="The original document is no longer available.")
-        return FileResponse(file_path, media_type="application/pdf", filename=safe_name)
+        return _storage_file_response(safe_name, safe_name, "application/pdf")
     finally:
         cursor.close()
         db.close()
@@ -1341,12 +1733,9 @@ def download_batch_file(filename: str, request: Request):
         raise HTTPException(status_code=404, detail="Batch file not found.")
     if any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-." for character in filename):
         raise HTTPException(status_code=404, detail="Batch file not found.")
-    file_path = os.path.abspath(os.path.join(UPLOAD_DIR, filename))
-    if os.path.commonpath([os.path.abspath(UPLOAD_DIR), file_path]) != os.path.abspath(UPLOAD_DIR):
+    if not _storage_exists(filename):
         raise HTTPException(status_code=404, detail="Batch file not found.")
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=404, detail="Batch file not found.")
-    return FileResponse(file_path, media_type="application/pdf", filename=filename)
+    return _storage_file_response(filename, filename, "application/pdf")
 
 
 @app.get("/orders/{order_id}/print-settings")
@@ -1470,13 +1859,12 @@ def get_reprint_details(order_id: str, request: Request, profile_id: int | None 
                 "color_mode": "Auto", "duplex": False, "quality": "Standard", "copies": 1,
             }
         source_files_available = bool(stored_files) and all(
-            os.path.isfile(os.path.join(UPLOAD_DIR, os.path.basename(item["storage_filename"])))
-            for item in stored_files
+            _storage_exists(item["storage_filename"]) for item in stored_files
         )
         if not stored_files and not has_document_records:
             source_files_available = bool(
                 order["filename"]
-                and os.path.isfile(os.path.join(UPLOAD_DIR, os.path.basename(order["filename"])))
+                and _storage_exists(os.path.basename(order["filename"]))
             )
         copies = int(settings["copies"])
         estimated_total_pages = int(order["total_pages"] or 0) * copies
@@ -1538,23 +1926,25 @@ def create_smart_reprint(
         source_documents = []
         if stored_documents:
             for item in stored_documents:
-                safe_name = os.path.basename(item["storage_filename"])
-                source_path = os.path.join(UPLOAD_DIR, safe_name)
-                if not os.path.isfile(source_path):
+                source_key = str(item["storage_filename"])
+                if not _storage_exists(source_key):
                     raise HTTPException(status_code=404, detail=f"Original file {item['original_filename']} is no longer available.")
-                with open(source_path, "rb") as source_file:
-                    data = source_file.read()
-                source_documents.append((item["original_filename"], data, json.loads(item["analysis_json"])))
+                source_documents.append((
+                    item["original_filename"],
+                    source_key,
+                    json.loads(item["analysis_json"]),
+                ))
         elif has_document_records:
             raise HTTPException(status_code=404, detail="The original documents have expired and are no longer available.")
         else:
             legacy_name = os.path.basename(source_order["filename"] or "")
-            legacy_path = os.path.join(UPLOAD_DIR, legacy_name)
-            if not legacy_name or not os.path.isfile(legacy_path):
+            if not legacy_name or not _storage_exists(legacy_name):
                 raise HTTPException(status_code=404, detail="The original document is no longer available for reprinting.")
-            with open(legacy_path, "rb") as source_file:
-                data = source_file.read()
-            source_documents.append((legacy_name, data, analyze_pdf(data, legacy_name)))
+            with tempfile.TemporaryDirectory(prefix="smartprint-reprint-") as working_directory:
+                legacy_path = os.path.join(working_directory, "legacy.pdf")
+                _storage_download(legacy_name, legacy_path)
+                legacy_analysis = analyze_pdf(legacy_path, legacy_name)
+            source_documents.append((legacy_name, legacy_name, legacy_analysis))
 
         cursor.execute("SELECT * FROM order_print_settings WHERE order_id = %s", (order_id,))
         settings = cursor.fetchone()
@@ -1592,12 +1982,10 @@ def create_smart_reprint(
         pickup_pin = generate_pin()
         tracking_token = secrets.token_urlsafe(32)
         new_storage_names = []
-        for original_name, data, analysis in source_documents:
+        for original_name, source_key, analysis in source_documents:
             storage_name = f"{uuid.uuid4().hex}.pdf"
-            target_path = os.path.join(UPLOAD_DIR, storage_name)
-            with open(target_path, "wb") as target_file:
-                target_file.write(data)
-            copied_paths.append(target_path)
+            _storage_copy(source_key, storage_name)
+            copied_paths.append(storage_name)
             new_storage_names.append((original_name, storage_name, analysis))
 
         cursor.execute("""
@@ -1634,15 +2022,20 @@ def create_smart_reprint(
             settings["copies"],
         ))
         _qr_for_order(new_order_id, pickup_pin, owner_id, cursor)
-        qr_path = os.path.join(QRCODE_DIR, f"{new_order_id}.png")
+        qr_path = f"qrcodes/{new_order_id}.png"
         db.commit()
     except Exception:
         db.rollback()
         for copied_path in copied_paths:
-            if os.path.exists(copied_path):
-                os.remove(copied_path)
-        if qr_path and os.path.exists(qr_path):
-            os.remove(qr_path)
+            try:
+                _storage_delete(copied_path)
+            except Exception:
+                logger.exception("Could not remove a reprint document after order creation failed.")
+        if qr_path:
+            try:
+                _storage_delete(qr_path)
+            except Exception:
+                logger.exception("Could not remove a reprint QR after order creation failed.")
         raise
     finally:
         cursor.close()
@@ -1755,7 +2148,7 @@ def merge_documents(payload: MergeRequest, request: Request):
             documents = cursor.fetchall()
             if documents:
                 paths = [
-                    (item["original_filename"], os.path.join(UPLOAD_DIR, os.path.basename(item["storage_filename"])))
+                    (item["original_filename"], item["storage_filename"])
                     for item in documents
                 ]
             else:
@@ -1769,12 +2162,15 @@ def merge_documents(payload: MergeRequest, request: Request):
                         detail=f"Original file(s) for order {order['order_id']} have expired.",
                     )
                 legacy_name = os.path.basename(order["filename"] or "")
-                paths = [(legacy_name, os.path.join(UPLOAD_DIR, legacy_name))] if legacy_name else []
-            if not paths or any(not os.path.isfile(path) for _, path in paths):
+                paths = [(legacy_name, legacy_name)] if legacy_name else []
+            if not paths or any(not _storage_exists(key) for _, key in paths):
                 raise HTTPException(status_code=404, detail=f"Original file(s) for order {order['order_id']} are unavailable.")
             cursor.execute("SELECT color_mode FROM order_print_settings WHERE order_id = %s", (order["order_id"],))
             settings = cursor.fetchone()
-            source_files.extend((path, settings and settings["color_mode"] == "B&W") for _, path in paths)
+            source_files.extend(
+                (name, key, settings and settings["color_mode"] == "B&W")
+                for name, key in paths
+            )
     finally:
         cursor.close()
         db.close()
@@ -1784,57 +2180,64 @@ def merge_documents(payload: MergeRequest, request: Request):
     has_bw, has_color = False, False
     generated_files = []
     try:
-        for file_path, forced_bw in source_files:
-            with open(file_path, "rb") as source_file:
-                document_data = source_file.read()
-            analysis = analyze_pdf(document_data, os.path.basename(file_path))
-            document = pymupdf.open(stream=document_data, filetype="pdf")
-            for page_num, page_result in enumerate(analysis["pages"]):
-                is_bw = forced_bw or not page_result["color"]
-                target = master_bw if is_bw else master_color
-                target.insert_pdf(document, from_page=page_num, to_page=page_num)
-                has_bw = has_bw or is_bw
-                has_color = has_color or not is_bw
-            document.close()
+        with tempfile.TemporaryDirectory(prefix="smartprint-batch-") as working_directory:
+            for index, (original_name, storage_key, forced_bw) in enumerate(source_files):
+                file_path = os.path.join(working_directory, f"{index}.pdf")
+                _storage_download(storage_key, file_path)
+                analysis = analyze_pdf(file_path, original_name)
+                document = pymupdf.open(file_path)
+                try:
+                    for page_num, page_result in enumerate(analysis["pages"]):
+                        is_bw = forced_bw or not page_result["color"]
+                        target = master_bw if is_bw else master_color
+                        target.insert_pdf(document, from_page=page_num, to_page=page_num)
+                        has_bw = has_bw or is_bw
+                        has_color = has_color or not is_bw
+                finally:
+                    document.close()
 
-        urls = []
-        export_id = uuid.uuid4().hex
-        if has_bw:
-            filename = f"batch-{owner_id}-{export_id}-bw.pdf"
-            master_bw.save(os.path.join(UPLOAD_DIR, filename))
-            generated_files.append(filename)
-            urls.append(f"/files/batch/{filename}")
-        if has_color:
-            filename = f"batch-{owner_id}-{export_id}-color.pdf"
-            master_color.save(os.path.join(UPLOAD_DIR, filename))
-            generated_files.append(filename)
-            urls.append(f"/files/batch/{filename}")
-        if generated_files:
-            tracking_db = get_db_connection()
-            tracking_cursor = None
-            try:
-                tracking_cursor = tracking_db.cursor()
-                tracking_cursor.execute(
-                    "INSERT INTO batch_exports (export_id, owner_id) VALUES (%s, %s)",
-                    (export_id, owner_id),
-                )
-                tracking_cursor.executemany(
-                    "INSERT INTO batch_export_files (filename, export_id) VALUES (%s, %s)",
-                    [(filename, export_id) for filename in generated_files],
-                )
-                tracking_cursor.executemany(
-                    "INSERT INTO batch_export_orders (export_id, order_id) VALUES (%s, %s)",
-                    [(export_id, order_id) for order_id in selected_order_ids],
-                )
-                tracking_db.commit()
-            except Exception:
-                tracking_db.rollback()
-                raise
-            finally:
-                if tracking_cursor:
-                    tracking_cursor.close()
-                tracking_db.close()
-        return {"status": "success", "urls": urls}
+            urls = []
+            export_id = uuid.uuid4().hex
+            if has_bw:
+                filename = f"batch-{owner_id}-{export_id}-bw.pdf"
+                output_path = os.path.join(working_directory, filename)
+                master_bw.save(output_path)
+                _storage_put_file(output_path, filename)
+                generated_files.append(filename)
+                urls.append(f"/files/batch/{filename}")
+            if has_color:
+                filename = f"batch-{owner_id}-{export_id}-color.pdf"
+                output_path = os.path.join(working_directory, filename)
+                master_color.save(output_path)
+                _storage_put_file(output_path, filename)
+                generated_files.append(filename)
+                urls.append(f"/files/batch/{filename}")
+            if generated_files:
+                tracking_db = get_db_connection()
+                tracking_cursor = None
+                try:
+                    tracking_cursor = tracking_db.cursor()
+                    tracking_cursor.execute(
+                        "INSERT INTO batch_exports (export_id, owner_id) VALUES (%s, %s)",
+                        (export_id, owner_id),
+                    )
+                    tracking_cursor.executemany(
+                        "INSERT INTO batch_export_files (filename, export_id) VALUES (%s, %s)",
+                        [(filename, export_id) for filename in generated_files],
+                    )
+                    tracking_cursor.executemany(
+                        "INSERT INTO batch_export_orders (export_id, order_id) VALUES (%s, %s)",
+                        [(export_id, order_id) for order_id in selected_order_ids],
+                    )
+                    tracking_db.commit()
+                except Exception:
+                    tracking_db.rollback()
+                    raise
+                finally:
+                    if tracking_cursor:
+                        tracking_cursor.close()
+                    tracking_db.close()
+            return {"status": "success", "urls": urls}
     except Exception:
         for filename in generated_files:
             _delete_upload_file(filename)
@@ -1906,7 +2309,18 @@ def get_order_qr(order_id: str, request: Request, tracking_token: str | None = N
         qr_record = cursor.fetchone()
         if not qr_record:
             raise HTTPException(status_code=404, detail="Pickup QR code not found.")
-        file_path = os.path.abspath(qr_record["qr_image_path"])
+        stored_path = str(qr_record["qr_image_path"])
+        if stored_path.startswith("qrcodes/"):
+            if not _storage_exists(stored_path):
+                raise HTTPException(status_code=404, detail="Pickup QR code not found.")
+            return _storage_file_response(
+                stored_path,
+                f"smartprint-{order_id}.png",
+                "image/png",
+            )
+        if OBJECT_STORAGE is not None:
+            raise HTTPException(status_code=404, detail="Pickup QR code not found.")
+        file_path = os.path.abspath(stored_path)
         if os.path.commonpath([os.path.abspath(QRCODE_DIR), file_path]) != os.path.abspath(QRCODE_DIR):
             raise HTTPException(status_code=404, detail="Pickup QR code not found.")
         if not os.path.isfile(file_path):
@@ -2357,8 +2771,9 @@ async def background_broadcast():
         # Could broadcast server status, etc.
         pass
 
-os.makedirs(FRONTEND_DIST, exist_ok=True)
-app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+if APP_ENV != "production":
+    os.makedirs(FRONTEND_DIST, exist_ok=True)
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn

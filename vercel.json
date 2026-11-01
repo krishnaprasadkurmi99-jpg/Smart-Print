@@ -1,0 +1,21 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "frontend": {
+      "root": "frontend",
+      "framework": "vite"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(register|login|session|logout|analyze|upload|profiles|reprints|orders|files|merge|qr|branches|printers|inventory|notifications|whatsapp|email|progress|analytics|search)(.*)",
+      "destination": "https://smart-print-lap6.onrender.com/$1$2"
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "frontend"
+      }
+    }
+  ]
+}

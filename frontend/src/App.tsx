@@ -65,6 +65,7 @@ import {
   formatDate,
   money,
   postFormWithProgress,
+  uploadFilesToStorage,
 } from "./api";
 import type {
   Analysis,
@@ -79,6 +80,16 @@ import type {
 } from "./api";
 
 type ShopUser = { owner_id: number; shop_name: string };
+type CustomerOrderResponse = {
+  status: string;
+  order_id: string;
+  tracking_token: string;
+  pickup_pin: string;
+  total_price: number;
+  total_pages: number;
+  bw_pages: number;
+  color_pages: number;
+};
 type ToastState = { message: string; tone: "success" | "error" | "info" };
 type NavItem = { label: string; icon: LucideIcon; section: string };
 
@@ -235,6 +246,7 @@ function StatusBadge({ status }: { status: string }) {
 function CustomerPage({ notify }: { notify: (notice: ToastState | null) => void }) {
   const [files, setFiles] = useState<File[]>([]);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [uploadToken, setUploadToken] = useState<string | null>(null);
   const [forceBw, setForceBw] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<"UPI" | "Cash">("UPI");
   const [acceptedSuggestions, setAcceptedSuggestions] = useState(false);
@@ -286,6 +298,7 @@ function CustomerPage({ notify }: { notify: (notice: ToastState | null) => void 
     }
     setFiles(merged);
     setAnalysis(null);
+    setUploadToken(null);
     setAcceptedSuggestions(false);
     setSuggestionBaseline(null);
   }, [files, notify]);
@@ -296,11 +309,23 @@ function CustomerPage({ notify }: { notify: (notice: ToastState | null) => void 
       return;
     }
     setIsAnalyzing(true);
+    setUploadProgress(0);
     try {
-      const body = new FormData();
-      files.forEach((file) => body.append("files", file));
-      const result = await api<Analysis>("/analyze/", { method: "POST", body });
+      const token = await uploadFilesToStorage(files, setUploadProgress);
+      let result: Analysis;
+      if (token) {
+        result = await api<Analysis>("/analyze/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ upload_token: token }),
+        });
+      } else {
+        const body = new FormData();
+        files.forEach((file) => body.append("files", file));
+        result = await postFormWithProgress<Analysis>("/analyze/", body, setUploadProgress);
+      }
       setAnalysis(result);
+      setUploadToken(token);
       setForceBw(false);
       setAcceptedSuggestions(false);
       setSuggestionBaseline(null);
@@ -356,29 +381,35 @@ function CustomerPage({ notify }: { notify: (notice: ToastState | null) => void 
     }
     setIsSubmitting(true);
     setUploadProgress(0);
-    const body = new FormData();
-    files.forEach((file) => body.append("files", file));
-    body.append("owner_id", ownerId);
-    body.append("payment_method", paymentMethod);
-    body.append("force_bw", String(forceBw));
-    body.append("customer_name", customerName.trim());
-    body.append("customer_phone", customerPhone.trim());
-    body.append("customer_email", customerEmail.trim());
-    body.append("print_settings", JSON.stringify({
-      ...printSettings,
-      color_mode: forceBw ? "B&W" : printSettings.color_mode,
-    }));
     try {
-      const result = await postFormWithProgress<{
-        status: string;
-        order_id: string;
-        tracking_token: string;
-        pickup_pin: string;
-        total_price: number;
-        total_pages: number;
-        bw_pages: number;
-        color_pages: number;
-      }>("/upload/", body, setUploadProgress);
+      const orderPayload = {
+        ...(uploadToken ? { upload_token: uploadToken } : {}),
+        owner_id: ownerId,
+        payment_method: paymentMethod,
+        force_bw: String(forceBw),
+        customer_name: customerName.trim(),
+        customer_phone: customerPhone.trim(),
+        customer_email: customerEmail.trim(),
+        print_settings: {
+          ...printSettings,
+          color_mode: forceBw ? "B&W" : printSettings.color_mode,
+        },
+      };
+      const result = uploadToken
+        ? await api<CustomerOrderResponse>("/upload/", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(orderPayload),
+          })
+        : await postFormWithProgress<CustomerOrderResponse>("/upload/", (() => {
+            const body = new FormData();
+            files.forEach((file) => body.append("files", file));
+            Object.entries(orderPayload).forEach(([key, value]) => {
+              body.append(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+            });
+            return body;
+          })(), setUploadProgress);
+      setUploadProgress(100);
       localStorage.setItem(`smartprint_order_${result.order_id}`, JSON.stringify({
         pin: result.pickup_pin,
         shopName,
@@ -396,6 +427,7 @@ function CustomerPage({ notify }: { notify: (notice: ToastState | null) => void 
   const removeFile = (name: string, lastModified: number) => {
     setFiles((current) => current.filter((file) => file.name !== name || file.lastModified !== lastModified));
     setAnalysis(null);
+    setUploadToken(null);
     setAcceptedSuggestions(false);
     setSuggestionBaseline(null);
   };
@@ -578,7 +610,7 @@ function CustomerPage({ notify }: { notify: (notice: ToastState | null) => void 
                   <p className="summary-footnote">Final charge is calculated by the print shop at the rates shown.</p>
                   <form onSubmit={submitOrder}>
                     <button className="button button-primary checkout-button" type="submit" disabled={isSubmitting}>
-                      {isSubmitting ? <><LoaderCircle className="spin" size={17} /> Uploading {uploadProgress}%</> : <>Place print order <ArrowRight size={17} /></>}
+                      {isSubmitting ? <><LoaderCircle className="spin" size={17} /> {uploadToken ? "Submitting order…" : `Uploading ${uploadProgress}%`}</> : <>Place print order <ArrowRight size={17} /></>}
                     </button>
                     {isSubmitting && <div className="upload-progress" aria-label={`Upload progress ${uploadProgress}%`}><span style={{ width: `${uploadProgress}%` }} /></div>}
                   </form>

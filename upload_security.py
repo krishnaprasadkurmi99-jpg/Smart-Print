@@ -18,7 +18,7 @@ class UploadRequestSizeLimitMiddleware:
         if (
             scope["type"] != "http"
             or scope.get("method") != "POST"
-            or scope.get("path") not in {"/upload/", "/analyze/"}
+            or scope.get("path") not in {"/upload/", "/analyze/", "/upload/presign"}
         ):
             await self.app(scope, receive, send)
             return

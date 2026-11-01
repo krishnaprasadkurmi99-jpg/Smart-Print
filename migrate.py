@@ -203,6 +203,16 @@ TABLE_STATEMENTS = (
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS upload_intents (
+        intent_hash CHAR(64) PRIMARY KEY,
+        manifest_json LONGTEXT NOT NULL,
+        expires_at DATETIME NOT NULL,
+        consumed_at DATETIME NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_upload_intents_expires (expires_at)
+    )
+    """,
 )
 
 
@@ -252,6 +262,10 @@ def run_migrations() -> None:
         user=user,
         password=password,
         database=database,
+        ssl_ca=os.getenv("SMARTPRINT_DB_SSL_CA"),
+        ssl_verify_cert=True,
+        ssl_verify_identity=True,
+        connection_timeout=15,
     )
     cursor = connection.cursor()
     try:

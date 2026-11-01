@@ -13,6 +13,7 @@ from unittest.mock import patch
 os.environ["SMARTPRINT_ENV"] = "development"
 
 from fastapi import UploadFile
+from starlette.datastructures import FormData
 
 import main
 from starlette.requests import Request
@@ -65,7 +66,7 @@ class IndependentAuditRegressionTests(unittest.IsolatedAsyncioTestCase):
         persisted_order = {}
 
         @asynccontextmanager
-        async def analyzed_uploads(files, request):
+        async def analyzed_uploads(request):
             yield [("customer.pdf", "staged.pdf")], [
                 {
                     "filename": "customer.pdf",
@@ -73,7 +74,15 @@ class IndependentAuditRegressionTests(unittest.IsolatedAsyncioTestCase):
                     "bw_pages": 1,
                     "color_pages": 0,
                 }
-            ]
+            ], None, None, FormData([
+                ("owner_id", "7"),
+                ("payment_method", "UPI"),
+                ("force_bw", "false"),
+                ("customer_name", "Attacker-controlled name"),
+                ("customer_phone", "5550100"),
+                ("customer_email", "attacker@example.test"),
+                ("print_settings", "{}"),
+            ])
 
         def persist_order(*args, **kwargs):
             persisted_order.update(kwargs)
@@ -94,21 +103,11 @@ class IndependentAuditRegressionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         async def route(request):
-            result = await main.upload_and_save_endpoint(
-                request=request,
-                files=[UploadFile(filename="customer.pdf", file=io.BytesIO(b"pdf"))],
-                payment_method="UPI",
-                force_bw="false",
-                customer_name="Attacker-controlled name",
-                customer_phone="5550100",
-                customer_email="attacker@example.test",
-                owner_id=7,
-                print_settings="{}",
-            )
+            result = await main.upload_and_save_endpoint(request=request)
             return JSONResponse(result)
 
         with (
-            patch.object(main, "_analyzed_pdf_uploads", analyzed_uploads),
+            patch.object(main, "_analyzed_request_uploads", analyzed_uploads),
             patch.object(main, "_persist_customer_order", side_effect=persist_order),
         ):
             response = await main.protect_owner_apis(request, route)

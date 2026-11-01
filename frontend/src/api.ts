@@ -174,6 +174,56 @@ export function postFormWithProgress<T>(
   });
 }
 
+export interface PresignedUpload {
+  upload_token: string;
+  files: Array<{ filename: string; size: number; url: string }>;
+}
+
+export async function uploadFilesToStorage(
+  files: File[],
+  onProgress: (progress: number) => void,
+): Promise<string | null> {
+  let intent: PresignedUpload;
+  try {
+    intent = await api<PresignedUpload>("/upload/presign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        files: files.map((file) => ({ filename: file.name, size: file.size })),
+      }),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Direct uploads are not enabled.") return null;
+    throw error;
+  }
+  const totalBytes = files.reduce((total, file) => total + file.size, 0);
+  const sentBytes = files.map(() => 0);
+
+  await Promise.all(intent.files.map((upload, index) => new Promise<void>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("PUT", upload.url);
+    request.setRequestHeader("Content-Type", "application/pdf");
+    request.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable) return;
+      sentBytes[index] = event.loaded;
+      onProgress(Math.round((sentBytes.reduce((sum, value) => sum + value, 0) / totalBytes) * 100));
+    });
+    request.addEventListener("load", () => {
+      if (request.status < 200 || request.status >= 300) {
+        reject(new Error(`Document upload failed (${request.status}).`));
+        return;
+      }
+      sentBytes[index] = files[index].size;
+      onProgress(Math.round((sentBytes.reduce((sum, value) => sum + value, 0) / totalBytes) * 100));
+      resolve();
+    });
+    request.addEventListener("error", () => reject(new Error("Could not connect to document storage.")));
+    request.addEventListener("abort", () => reject(new Error("Document upload was cancelled.")));
+    request.send(files[index]);
+  })));
+  return intent.upload_token;
+}
+
 export function money(value: number | string): string {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
