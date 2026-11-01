@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shop Owner Portal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center relative">
+
+    <!-- Document Preview Modal (Hidden initially) -->
+    <div id="previewModal" class="hidden absolute inset-0 bg-black bg-opacity-75 flex justify-center items-center z-50">
+        <div class="bg-white p-4 rounded-lg w-11/12 h-5/6 flex flex-col">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-bold">Document Preview</h2>
+                <button onclick="closePreview()" class="bg-red-500 text-white px-4 py-1 rounded hover:bg-red-600 font-bold">Close</button>
+            </div>
+            <iframe id="previewFrame" src="" title="Document preview" class="w-full flex-grow border rounded"></iframe>
+        </div>
+    </div>
+
+    <!-- AUTHENTICATION SCREEN -->
+    <div id="authScreen" class="bg-white p-8 rounded-xl shadow-lg w-full max-w-md">
+        <h2 id="authTitle" class="text-2xl font-bold text-center text-gray-800 mb-6">Shop Owner Login</h2>
+        
+        <div id="registerFields" class="hidden">
+            <input type="text" id="shopName" placeholder="Shop Name (e.g. Campus Prints)" class="w-full p-3 border rounded mb-4">
+        </div>
+        
+        <input type="text" id="username" placeholder="Username" class="w-full p-3 border rounded mb-4">
+        <input type="password" id="password" placeholder="Password" class="w-full p-3 border rounded mb-6">
+        
+        <button id="loginBtn" onclick="login()" class="w-full bg-gray-800 text-white font-bold py-3 rounded-lg hover:bg-gray-900 transition mb-4">Login to Dashboard</button>
+        <button id="registerBtn" onclick="register()" class="hidden w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition mb-4">Create Account</button>
+        
+        <div class="text-center">
+            <button id="toggleAuthBtn" onclick="toggleAuthMode()" class="text-sm text-blue-600 hover:underline font-medium">Need to create an account? Register here.</button>
+        </div>
+        <p id="authMessage" class="text-sm text-center text-red-500 mt-4"></p>
+    </div>
+
+    <!-- ADMIN DASHBOARD -->
+    <div id="dashboardScreen" class="hidden w-full max-w-6xl p-8">
+        <div class="flex justify-between items-start mb-6">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">Print Queue - <span id="displayShopName" class="text-blue-600"></span></h1>
+                <a href="index.html" class="text-blue-600 font-semibold hover:underline">&larr; Back to Student Portal</a>
+                
+                <!-- Batch Actions -->
+                <div class="mt-6 flex gap-4">
+                    <button onclick="mergeAndPrint()" class="bg-purple-600 text-white px-6 py-2 rounded-lg font-bold shadow hover:bg-purple-700 transition">
+                        🖨️ Merge & Print Selected (Separates B&W/Color)
+                    </button>
+                    <button onclick="deleteSelected()" class="bg-red-600 text-white px-6 py-2 rounded-lg font-bold shadow hover:bg-red-700 transition">
+                        🗑️ Delete Selected
+                    </button>
+                </div>
+            </div>
+            
+            <div class="bg-white p-3 rounded-lg shadow-sm border text-center flex flex-col items-center">
+                <p class="text-sm font-bold text-gray-700 mb-1">Scan to Upload Document</p>
+                <img id="shopQrCode" src="" alt="Shop QR Code" class="w-24 h-24 border">
+            </div>
+        </div>
+        
+        <div class="bg-white p-6 rounded-lg shadow-md">
+            <table class="w-full text-left border-collapse">
+                <thead>
+                    <tr class="bg-gray-200 text-gray-700">
+                        <th class="p-3 border-b w-12"><input type="checkbox" id="selectAll" onclick="toggleAll(this)" class="w-4 h-4" aria-label="Select all orders" title="Select all orders"></th>
+                        <th class="p-3 border-b">Document</th>
+                        <th class="p-3 border-b">Pages</th>
+                        <th class="p-3 border-b">Price</th>
+                        <th class="p-3 border-b">Payment Method</th>
+                        <th class="p-3 border-b">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="orderTable"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        let isLoginMode = true;
+        const authScreen = document.getElementById('authScreen');
+        const dashboardScreen = document.getElementById('dashboardScreen');
+        const authMessage = document.getElementById('authMessage');
+
+        function toggleAuthMode() {
+            isLoginMode = !isLoginMode;
+            authMessage.textContent = "";
+            document.getElementById('authTitle').textContent = isLoginMode ? "Shop Owner Login" : "Register New Shop";
+            document.getElementById('registerFields').classList.toggle('hidden');
+            document.getElementById('loginBtn').classList.toggle('hidden');
+            document.getElementById('registerBtn').classList.toggle('hidden');
+            document.getElementById('toggleAuthBtn').textContent = isLoginMode ? "Need to create an account? Register here." : "Already have an account? Login here.";
+        }
+
+        async function register() {
+            const shopName = document.getElementById('shopName').value;
+            const user = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+            const formData = new FormData(); 
+            formData.append('shop_name', shopName); 
+            formData.append('username', user); 
+            formData.append('password', pass);
+            
+            const res = await fetch('http://localhost:8080/register/', { method: 'POST', body: formData });
+            const data = await res.json();
+            authMessage.textContent = data.message;
+            if(data.status === "success") setTimeout(toggleAuthMode, 1500);
+        }
+
+        async function login() {
+            const user = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+            const formData = new FormData(); 
+            formData.append('username', user); 
+            formData.append('password', pass);
+            
+            const res = await fetch('http://localhost:8080/login/', { method: 'POST', body: formData });
+            const data = await res.json();
+            
+            if(data.status === "success") {
+                authScreen.classList.add('hidden'); 
+                dashboardScreen.classList.remove('hidden'); 
+                dashboardScreen.classList.add('block');
+                document.getElementById('displayShopName').textContent = data.shop_name;
+                document.getElementById('shopQrCode').src = 'https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=' + encodeURIComponent(window.location.href.replace('admin.html', 'index.html'));
+                fetchOrders(); 
+                setInterval(fetchOrders, 5000);
+            } else {
+                authMessage.textContent = data.message;
+            }
+        }
+
+        async function fetchOrders() {
+            const res = await fetch('http://localhost:8080/orders/');
+            const result = await res.json();
+            const table = document.getElementById('orderTable');
+            table.innerHTML = "";
+
+            if (result.status === "success") {
+                result.data.forEach(o => {
+                    const payBadge = o.payment_method === 'UPI' 
+                        ? `<span class="bg-blue-100 text-blue-800 py-1 px-2 rounded text-xs font-bold">UPI</span>`
+                        : `<span class="bg-green-100 text-green-800 py-1 px-2 rounded text-xs font-bold">CASH</span>`;
+
+                    table.innerHTML += `
+                        <tr class="hover:bg-gray-50 border-b">
+                            <td class="p-3"><input type="checkbox" class="order-checkbox w-4 h-4" value="${o.order_id}"></td>
+                            <td class="p-3 font-bold text-blue-600">${o.filename}</td>
+                            <td class="p-3 text-sm">${o.bw_pages} B&W / ${o.color_pages} Color</td>
+                            <td class="p-3 font-bold">₹${o.total_price}</td>
+                            <td class="p-3">${payBadge}</td>
+                            <td class="p-3 flex gap-2">
+                                <button onclick="openPreview('${o.filename}')" class="bg-gray-500 text-white px-3 py-1 rounded hover:bg-gray-600 text-xs font-bold transition">👁️ Preview</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+            }
+        }
+
+        function toggleAll(source) {
+            const checkboxes = document.querySelectorAll('.order-checkbox');
+            for(let i=0; i<checkboxes.length; i++) {
+                checkboxes[i].checked = source.checked;
+            }
+        }
+
+        function openPreview(filename) {
+            document.getElementById('previewFrame').src = `http://localhost:8080/uploads/${filename}`;
+            document.getElementById('previewModal').classList.remove('hidden');
+        }
+
+        function closePreview() {
+            document.getElementById('previewModal').classList.add('hidden');
+            document.getElementById('previewFrame').src = "";
+        }
+
+        async function mergeAndPrint() {
+            const selected = Array.from(document.querySelectorAll('.order-checkbox:checked')).map(cb => parseInt(cb.value));
+            if(selected.length === 0) return alert("Select documents to merge.");
+            
+            const btn = document.querySelector('button[onclick="mergeAndPrint()"]');
+            btn.textContent = "Merging Pages..."; btn.disabled = true;
+
+            try {
+                const res = await fetch('http://localhost:8080/merge/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ order_ids: selected })
+                });
+                const data = await res.json();
+                
+                if(data.status === "success") {
+                    alert("Merge Complete! Opening master files...");
+                    data.urls.forEach(url => window.open(url, '_blank')); 
+                } else {
+                    alert("Error merging documents.");
+                }
+            } catch(e) {
+                alert("Server communication error.");
+            }
+            
+            btn.textContent = "🖨️ Merge & Print Selected (Separates B&W/Color)"; btn.disabled = false;
+        }
+
+        async function deleteSelected() {
+            const selected = Array.from(document.querySelectorAll('.order-checkbox:checked')).map(cb => parseInt(cb.value));
+            if(selected.length === 0) return alert("Select documents to delete.");
+            if(confirm("Securely delete selected files?")) {
+                for(let id of selected) {
+                    await fetch(`http://localhost:8080/orders/${id}`, { method: 'DELETE' });
+                }
+                fetchOrders();
+            }
+        }
+    </script>
+</body>
+</html>

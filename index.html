@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Print - Document Upload</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --bg-secondary: #12121a;
+            --fg: #e8e8f0;
+            --muted: #6b6b80;
+            --accent: #00d4aa;
+            --accent-glow: rgba(0, 212, 170, 0.4);
+            --card: #1a1a24;
+            --border: #2a2a3a;
+            --danger: #ff4757;
+            --warning: #ffa502;
+        }
+
+        * {
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--fg);
+            min-height: 100vh;
+        }
+
+        .glass-card {
+            background: rgba(26, 26, 36, 0.8);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+        }
+
+        .glass-card-large {
+            background: rgba(26, 26, 36, 0.7);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: var(--bg);
+            font-weight: 600;
+            padding: 12px 24px;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 14px var(--accent-glow);
+            width: 100%;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px var(--accent-glow);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--fg);
+            font-weight: 500;
+            padding: 12px 24px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status-online { background: var(--accent); box-shadow: 0 0 10px var(--accent-glow); }
+        .status-offline { background: var(--danger); }
+        .status-paused { background: var(--warning); }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .input-field {
+            width: 100%;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 16px;
+            color: var(--fg);
+            font-size: 15px;
+            transition: all 0.3s ease;
+        }
+
+        .input-field:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .file-upload {
+            border: 2px dashed var(--border);
+            border-radius: 16px;
+            padding: 32px 24px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .file-upload:hover {
+            border-color: var(--accent);
+            background: var(--accent-glow);
+        }
+
+        .file-upload input {
+            display: none;
+        }
+
+        .file-upload-icon {
+            width: 48px;
+            height: 48px;
+            margin: 0 auto 16px;
+            opacity: 0.5;
+        }
+
+        .mode-toggle {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 4px;
+        }
+
+        .mode-btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .mode-btn.active {
+            background: var(--accent);
+            color: var(--bg);
+        }
+
+        .quote-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+        }
+
+        .price-tag {
+            font-size: 24px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent), #00ffcc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .progress-bar {
+            height: 6px;
+            background: var(--border);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+        }
+
+        .empty-state-icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 24px;
+            opacity: 0.3;
+        }
+
+        @media (max-width: 640px) {
+            .price-tag {
+                font-size: 20px;
+            }
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+
+    <!-- Navigation -->
+    <nav class="bg-bg-secondary/90 backdrop-blur border-b border-border sticky top-0 left-0 right-0 z-50">
+        <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-[var(--accent)] to-emerald-600 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor">
+                        <path d="M12 15v2m0 0v-2m-6.96 4h13.92a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        <path d="M2 9h4l2 8H2a2 2 0 00-2 2v8a2 2 0 002 2h16a2 2 0 002-2v-8a2 2 0 00-2-2H5a2 2 0 00-2-2V5a2 2 0 00-2-2H2zm10-4h4m4 4V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v8z"/>
+                    </svg>
+                </div>
+                <span class="text-lg font-bold tracking-none">Smart Print</span>
+            </div>
+            <div class="hidden md:flex items-center gap-6">
+                <a href="#track" class="text-sm text-muted hover:text-accent transition">Track Order</a>
+                <a href="#dashboard" class="text-sm text-muted hover:text-accent transition">Owner Login</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-5xl mx-auto px-6 py-24">
+
+        <!-- Upload Section -->
+        <div class="glass-card-large p-8 md:p-12 mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-2">Upload Documents for Printing</h1>
+            <p class="text-muted mb-8">Get a instant quote for your print job</p>
+            
+            <form id="uploadForm" novalidate>
+                <div class="file-upload" id="uploadArea">
+                    <input type="file" id="pdfInput" accept=".pdf" multiple class="hidden" />
+                    <div class="file-upload-icon">
+                        <svg class="w-8 h-8 text-muted mx-auto" fill="none" stroke="currentColor">
+                            <path d="M12 4v16m8-8H4"/>
+                        </svg>
+                    </div>
+                    <p class="text-sm text-muted mb-2">Drag and drop PDFs here</p>
+                    <p class="text-xs text-muted">Maximum 10 files, each up to 50MB</p>
+                    <button type="button" class="btn-secondary mt-4 w-full">Select PDF Files</button>
+                </div>
+
+                <div id="quoteCard" class="quote-card hidden mt-8">
+                    <h3 class="font-bold text-sm uppercase tracking-wider mb-4">Analysis Complete</h3>
+                    <p class="text-muted mb-4">We found <span id="quoteTotal">0</span> pages 
+                        (<span id="quoteBW">0</span> B&W, <span id="quoteColor">0</span> Color)</p>
+                        
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                        <div>
+                            <p class="text-sm text-muted">Print Mode</p>
+                            <div class="space-y-2">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" name="printMode" value="analyzed" class="w-4 h-4 text-accent rounded" checked>
+                                    <span>Print as Analyzed</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" name="printMode" value="forceBw" class="w-4 h-4 text-accent rounded">
+                                    <span>Force All B&W</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div>
+                            <p class="text-sm text-muted">Payment Method</p>
+                            <div class="space-y-2">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" name="payMethod" value="UPI" class="w-4 h-4 text-accent rounded" checked>
+                                    <span>Pay Now (UPI)</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" name="payMethod" value="Cash" class="w-4 h-4 text-accent rounded">
+                                    <span>Pay at Shop</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-6">
+                        <p class="text-sm text-muted">Estimated Completion</p>
+                        <input type="time" id="estCompletion" class="input-field" placeholder="Select time">
+                    </div>
+                    
+                    <button type="submit" class="btn-primary w-full mb-4">
+                        Send Order to Shop
+                    </button>
+                </div>
+
+                <!-- Receipt Section -->
+                <div id="receiptArea" class="quote-card hidden mt-8 pt-8 border-t">
+                    <h3 class="font-bold text-gray-400 mb-4">Order Sent to Queue!</h3>
+                    
+                    <div class="flex justify-between text-lg text-accent font-extrabold pt-2 mb-2">
+                        <span>Final Total Due:</span>
+                        <span>₹<span id="resPrice">0</span></span>
+                    </div>
+                    
+                    <div id="upiSection" class="flex flex-col items-center mb-6">
+                        <p class="text-xs text-gray-500 mb-2">Scan to pay exactly ₹<span id="qrAmount">0</span></p>
+                        <div class="qr-preview" id="upiQrContainer">
+                            <img id="upiQrCode" src="" alt="Scan to Pay" class="border rounded-lg bg-white p-2 shadow-sm">
+                        </div>
+                    </div>
+                    
+                    <div id="cashSection" class="text-center mb-6">
+                        <p class="text-sm font-bold text-green-600 bg-green-100 p-2 rounded">Files sent! Please pay cash at the counter.</p>
+                    </div>
+                    
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <button class="btn-primary flex-1">Download QR Code</button>
+                        <button class="btn-secondary flex-1">Save to Phone</button>
+                    </div>
+                    
+                    <p class="text-sm text-muted mt-4">Or share these details with the shop:</p>
+                    <div class="mt-3 p-3 bg-bg-secondary rounded">
+                        <p><strong>Order ID:</strong> <span id="displayOrderId">SP2026000125</span></p>
+                        <p><strong>Pickup PIN:</strong> <span id="displayPin">4827</span></p>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+    </main>
+
+    <script>
+        // Initialize variables
+        let pdfFiles = [];
+        let analysisData = null;
+        let orderId = '';
+        let pickupPin = '';
+
+        // File upload handling
+        const pdfInput = document.getElementById('pdfInput');
+        const uploadArea = document.getElementById('uploadArea');
+        const fileNameDisplay = document.createElement('p');
+
+        pdfInput.addEventListener('change', function() {
+            if (this.files.length > 0) {
+                pdfFiles = Array.from(this.files);
+                const fileName = pdfFiles.length === 1 ? pdfFiles[0].name : pdfFiles.length + " files selected";
+                uploadArea.querySelector('p').textContent = fileName;
+                uploadArea.querySelector('button').textContent = `Replace ${pdfFiles.length} files`;
+                uploadArea.classList.add('border-accent');
+                uploadArea.classList.remove('border-default');
+            }
+        });
+
+        uploadArea.addEventListener('click', function() {
+            pdfInput.click();
+        });
+
+        uploadArea.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            uploadArea.classList.add('border-accent');
+            uploadArea.classList.remove('border-default');
+        });
+
+        uploadArea.addEventListener('dragleave', function() {
+            uploadArea.classList.remove('border-accent');
+            uploadArea.classList.add('border-default');
+        });
+
+        uploadArea.addEventListener('drop', function(e) {
+            e.preventDefault();
+            pdfFiles = Array.from(e.dataTransfer.files);
+            const fileName = pdfFiles.length === 1 ? pdfFiles[0].name : pdfFiles.length + " files dropped";
+            uploadArea.querySelector('p').textContent = fileName;
+            uploadArea.querySelector('button').textContent = `Replace ${pdfFiles.length} files`;
+            uploadArea.classList.add('border-accent');
+            uploadArea.classList.remove('border-default');
+        });
+
+        // Analyze documents
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            if (pdfFiles.length === 0) {
+                alert("Please select at least one PDF file.");
+                return;
+            }
+
+            const analyzeBtn = this.querySelector('button[type="submit"]');
+            const originalText = analyzeBtn.textContent;
+            
+            analyzeBtn.textContent = "Analyzing documents...";
+            analyzeBtn.disabled = true;
+
+            const formData = new FormData();
+            pdfFiles.forEach(file => formData.append('files', file));
+
+            try {
+                const response = await fetch('http://localhost:8000/analyze/', { method: 'POST', body: formData });
+                const data = await response.json();
+
+                if (data.status === "success") {
+                    // Store analysis data
+                    analysisData = data;
+                    
+                    // Populate quote
+                    document.getElementById('quoteTotal').textContent = data.total_pages;
+                    document.getElementById('quoteBW').textContent = data.bw_pages;
+                    document.getElementById('quoteColor').textContent = data.color_pages;
+                    document.getElementById('priceAnalyzed').textContent = data.analyzed_price;
+                    document.getElementById('priceForced').textContent = data.forced_bw_price;
+                    
+                    // Show quote card, hide upload area
+                    document.getElementById('uploadArea').classList.add('hidden');
+                    document.getElementById('quoteCard').classList.remove('hidden');
+                    
+                    // Set estimated completion time (2 hours from now)
+                    const now = new Date();
+                    const completionTime = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+                    document.getElementById('estCompletion').value = completionTime.toTimeString().slice(0, 5);
+                    
+                    // Scroll to quote
+                    document.getElementById('quoteCard').scrollIntoView({ behavior: 'smooth' });
+                } else {
+                    alert("Error analyzing documents: " + (data.message || "Unknown error"));
+                }
+            } catch (error) {
+                alert("Error connecting to server for analysis.");
+            }
+
+            analyzeBtn.textContent = originalText;
+            analyzeBtn.disabled = false;
+        });
+
+        // Send order to shop
+        document.getElementById('quoteCard').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const sendBtn = this.querySelector('button[type="submit"]');
+            const originalText = sendBtn.textContent;
+            
+            sendBtn.textContent = "Sending to shop...";
+            sendBtn.disabled = true;
+
+            const selectedPayment = document.querySelector('input[name="payMethod"]:checked').value;
+            const forceBwChoice = document.querySelector('input[name="printMode"]:checked').value === "forceBw";
+            
+            const formData = new FormData();
+            pdfFiles.forEach(file => formData.append('files', file));
+            formData.append('payment_method', selectedPayment);
+            formData.append('force_bw', forceBwChoice ? "true" : "false");
+
+            try {
+                const response = await fetch('http://localhost:8000/upload/', { method: 'POST', body: formData });
+                const data = await response.json();
+
+                if (data.status === "success") {
+                    // Show receipt
+                    document.getElementById('resPrice').textContent = data.total_price;
+                    document.getElementById('qrAmount').textContent = data.total_price;
+                    document.getElementById('displayOrderId').textContent = data.order_id;
+                    document.getElementById('displayPin').textContent = data.pickup_pin;
+                    
+                    // Generate and display QR code
+                    const qrData = `ORDER:${data.order_id}:PIN:${data.pickup_pin}:OWNER:1`;
+                    document.getElementById('upiQrCode').src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrData)}`;
+                    document.getElementById('upiSection').classList.remove('hidden');
+                    document.getElementById('cashSection').classList.add('hidden');
+                    
+                    // Show receipt, hide options
+                    document.getElementById('quoteCard').classList.add('hidden');
+                    document.getElementById('receiptArea').classList.remove('hidden');
+                    
+                    // Store order info
+                    orderId = data.order_id;
+                    pickupPin = data.pickup_pin;
+                    
+                    // Scroll to receipt
+                    document.getElementById('receiptArea').scrollIntoView({ behavior: 'smooth' });
+                } else {
+                    alert("Error sending order: " + (data.message || "Unknown error"));
+                }
+            } catch (error) {
+                alert("Error sending order to server.");
+            }
+
+            sendBtn.textContent = originalText;
+            sendBtn.disabled = false;
+        });
+
+        // Mode toggle
+        const modeBtns = document.querySelectorAll('.mode-btn');
+        modeBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                modeBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+            });
+        });
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            // Set default border state
+            uploadArea.classList.add('border-default');
+            
+            // Check for existing order in URL
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('order')) {
+                showTrackOrder(urlParams.get('order'));
+            }
+        });
+
+        function showTrackOrder(orderId) {
+            // Navigate to tracking page
+            window.location.href = `/track/${orderId}`;
+        }
+    </script>
+</body>
+</html>

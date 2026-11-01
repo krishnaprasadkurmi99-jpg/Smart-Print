@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Print - Order Tracking</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --bg-secondary: #12121a;
+            --fg: #e8e8f0;
+            --muted: #6b6b80;
+            --accent: #00d4aa;
+            --accent-glow: rgba(0, 212, 170, 0.4);
+            --card: #1a1a24;
+            --border: #2a2a3a;
+            --danger: #ff4757;
+            --warning: #ffa502;
+        }
+
+        * {
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--fg);
+            min-height: 100vh;
+        }
+
+        .glass-card {
+            background: rgba(26, 26, 36, 0.8);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+        }
+
+        .glass-card-large {
+            background: rgba(26, 26, 36, 0.7);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: var(--bg);
+            font-weight: 600;
+            padding: 12px 24px;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 14px var(--accent-glow);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px var(--accent-glow);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--fg);
+            font-weight: 500;
+            padding: 12px 24px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status-online { background: var(--accent); box-shadow: 0 0 10px var(--accent-glow); }
+        .status-offline { background: var(--danger); }
+        .status-paused { background: var(--warning); }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .progress-timeline {
+            position: relative;
+            padding-left: 20px;
+        }
+
+        .progress-timeline::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 12px;
+            bottom: 0;
+            width: 2px;
+            background: var(--border);
+        }
+
+        .timeline-step {
+            position: relative;
+            margin-bottom: 24px;
+            padding-left: 24px;
+        }
+
+        .timeline-step::before {
+            content: '';
+            position: absolute;
+            left: -8px;
+            top: 4px;
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border);
+            border-radius: 50%;
+            background: white;
+            transition: all 0.3s ease;
+        }
+
+        .timeline-step.completed::before {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .timeline-step.active::before {
+            background: var(--accent);
+            border-color: var(--accent);
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        .qr-preview {
+            width: 200px;
+            height: 200px;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+        }
+
+        .empty-state-icon {
+            width: 60px;
+            height: 60px;
+            margin: 0 auto 20px;
+            opacity: 0.5;
+        }
+
+        .mode-toggle {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 8px;
+        }
+
+        .mode-btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 14px;
+        }
+
+        .mode-btn.active {
+            background: var(--accent);
+            color: var(--bg);
+        }
+
+        .scan-result {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        @media (max-width: 640px) {
+            .qr-preview {
+                width: 150px;
+                height: 150px;
+            }
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+
+    <!-- Navigation -->
+    <nav class="bg-bg-secondary/80 backdrop-blur md:fixed top-0 left-0 right-0 z-50 border-b border-border">
+        <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+                <div class="w-10 h-10 rounded-xl bg-accent flex items-center justify-center">
+                    <svg class="w-6 h-6 text-bg" fill="none" stroke="currentColor">
+                        <path d="M12 15v2m0 0v-2m-6.96 4h13.92a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        <path d="M2 9h4l2 8H2a2 2 0 00-2 2v8a2 2 0 002 2h16a2 2 0 002-2v-8a2 2 0 00-2-2H5a2 2 0 00-2-2V5a2 2 0 00-2-2H2zm10-4h4m4 4V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v8z"/>
+                    </svg>
+                </div>
+                <span class="text-lg font-semibold tracking-none">Smart Print Track</span>
+            </div>
+            <div class="hidden md:flex items-center gap-6">
+                <a href="/track/SP2026000125" class="text-sm text-muted hover:text-accent transition">Track Order</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-5xl mx-auto px-6 py-24">
+
+        <!-- Order Header -->
+        <div class="glass-card-large md:glass-card p-8 md:p-12 mb-8">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+                <div>
+                    <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-2">Order #SP2026000125</h1>
+                    <p class="text-muted mb-6">Pickup QR Code</p>
+                    
+                    <div class="scan-result" id="scanResult">
+                        <div class="qr-preview">
+                            <div id="qrCodeImage" style="width: 120px; height: 120px; background: var(--bg);"></div>
+                        </div>
+                        <p class="text-sm mt-3" id="qrData">Scan QR to view order details</p>
+                    </div>
+                    
+                    <div class="mt-6 pt-6 border-t border-border">
+                        <div class="flex items-center gap-3 mb-2">
+                            <span class="status-dot status-online"></span>
+                            <span class="text-sm text-muted">Order Active</span>
+                        </div>
+                        <p class="text-sm text-muted" id="orderStatus">Waiting for printing</p>
+                    </div>
+                </div>
+                <div class="md:mt-0 md:ml-8">
+                    <div class="glass-card p-6">
+                        <h3 class="font-bold text-sm uppercase tracking-wider mb-4">Order Details</h3>
+                        <p class="text-sm mb-2"><strong>Customer:</strong> <span id="customerName">Rahul Kumar</span></p>
+                        <p class="text-sm mb-2"><strong>Order Date:</strong> <span id="orderDate">Today at 2:30 PM</span></p>
+                        <p class="text-sm mb-2"><strong>Est. Completion:</strong> <span id="estCompletion">5:30 PM</span></p>
+                        <p class="text-sm mb-2"><strong>Pages:</strong> <span id="totalPages">12</span></p>
+                        <p class="text-sm mb-2"><strong>Color:</strong> <span id="colorPages">8</span> color, <span id="bwPages">4</span> B&W</p>
+                        <p class="text-sm mb-2"><strong>Cost:</strong> <span id="totalCost">₹104.00</span></p>
+                        <p class="text-sm mb-2"><strong>Status:</strong> <span id="currentStatus">Waiting</span></p>
+                    </div>
+                    
+                    <div class="glass-card p-6 mt-4">
+                        <h3 class="font-bold text-sm uppercase tracking-wider mb-4">Tracking Timeline</h3>
+                        <div class="progress-timeline">
+                            <div class="timeline-step completed" id="step1">
+                                <div>Request Received</div>
+                            </div>
+                            <div class="timeline-step" id="step2">
+                                <div>Files Verified</div>
+                            </div>
+                            <div class="timeline-step" id="step3">
+                                <div>Accepted</div>
+                            </div>
+                            <div class="timeline-step" id="step4">
+                                <div>Waiting for Printing</div>
+                            </div>
+                            <div class="timeline-step" id="step5">
+                                <div>Printing</div>
+                            </div>
+                            <div class="timeline-step" id="step6">
+                                <div>Quality Check</div>
+                            </div>
+                            <div class="timeline-step" id="step7">
+                                <div>Ready for Pickup</div>
+                            </div>
+                            <div class="timeline-step" id="step8">
+                                <div>Completed</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- QR Code Download Section -->
+        <div class="glass-card p-8">
+            <h2 class="text-2xl font-bold tracking-tight mb-6">Download QR Code</h2>
+            <p class="text-muted mb-6">Save this QR code on your phone. The shop owner can scan it to instantly open your order.</p>
+            
+            <div class="flex flex-col sm:flex-row gap-4 items-center justify-center">
+                <button class="btn-primary flex-1">Download QR</button>
+                <button class="btn-secondary">Save to Phone</button>
+            </div>
+            
+            <p class="text-sm text-muted mt-4">Or share these details with the shop:</p>
+            <div class="mt-4 p-3 bg-bg-secondary rounded">
+                <p><strong>Order ID:</strong> <span id="displayOrderId">SP2026000125</span></p>
+                <p><strong>Pickup PIN:</strong> <span id="displayPin">4827</span></p>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        // Initialize QR code
+        function initQR() {
+            const qrData = "ORDER:SP2026000125:PIN:4827:OWNER:1";
+            const qrContainer = document.getElementById('qrCodeImage');
+            
+            // Generate QR using Google Chart API
+            qrContainer.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(qrData)}" alt="Order QR Code">`;
+            document.getElementById('qrData').textContent = qrData;
+            document.getElementById('displayOrderId').textContent = 'SP2026000125';
+            document.getElementById('displayPin').textContent = '4827';
+        }
+
+        // Animated progress timeline
+        function animateTimeline() {
+            const steps = document.querySelectorAll('.timeline-step');
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.style.opacity = '1';
+                        entry.target.style.transform = 'translateX(0)';
+                    }
+                });
+            }, { threshold: 0.5 });
+
+            steps.forEach(step => {
+                step.style.opacity = '0';
+                step.style.transform = 'translateX(-20px)';
+                step.style.transition = 'all 0.5s ease';
+                observer.observe(step);
+            });
+        }
+
+        // Status badge coloring
+        function updateStatus() {
+            const status = '<?php echo $order['order_status'] ?? \"Waiting\"; ?>';
+            const statusEl = document.getElementById('currentStatus');
+            const statusMap = {
+                'Waiting': 'text-muted',
+                'Accepted': 'text-accent',
+                'Printing': 'text-warning',
+                'Quality Check': 'text-muted',
+                'Ready for Pickup': 'text-accent',
+                'Completed': 'text-green-500'
+            };
+            if (statusEl && statusMap[status]) {
+                statusEl.className = `text-sm ${statusMap[status]}`;
+            }
+        }
+
+        // Progress timeline updates based on status
+        function updateProgress(status) {
+            const steps = [
+                'Request Received',
+                'Files Verified', 
+                'Accepted',
+                'Waiting for Printing',
+                'Printing',
+                'Quality Check',
+                'Ready for Pickup',
+                'Completed'
+            ];
+            
+            const stepEls = document.querySelectorAll('.timeline-step');
+            stepEls.forEach((step, index) => {
+                step.classList.remove('completed', 'active');
+                if (index < steps.length) {
+                    if (index === 0) {
+                        step.classList.add('completed');
+                    } else if (index < steps.indexOf(status)) {
+                        step.classList.add('completed');
+                    }
+                }
+            });
+        }
+
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', function() {
+            initQR();
+            animateTimeline();
+            updateStatus();
+            
+            // Check for status updates every 3 seconds
+            setInterval(() => {
+                // In a real app, this would poll the API for status updates
+                console.log('Checking for status updates...');
+            }, 3000);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Print - Owner Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --bg-secondary: #12121a;
+            --fg: #e8e8f0;
+            --muted: #6b6b80;
+            --accent: #00d4aa;
+            --accent-glow: rgba(0, 212, 170, 0.4);
+            --card: #1a1a24;
+            --border: #2a2a3a;
+            --danger: #ff4757;
+            --warning: #ffa502;
+            --purple: #a855f7;
+            --gradient-start: #0f0f1a;
+            --gradient-end: #1a1a24;
+        }
+
+        * {
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--fg);
+            min-height: 100vh;
+        }
+
+        .glass-card {
+            background: rgba(26, 26, 36, 0.8);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+        }
+
+        .glass-card-large {
+            background: rgba(26, 26, 36, 0.7);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+        }
+
+        .gradient-bg {
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: var(--bg);
+            font-weight: 600;
+            padding: 12px 24px;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 14px var(--accent-glow);
+            width: 100%;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px var(--accent-glow);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--fg);
+            font-weight: 500;
+            padding: 12px 24px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .btn-purple {
+            background: var(--purple);
+            color: white;
+            font-weight: 500;
+            padding: 12px 24px;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-purple:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 14px rgba(168, 85, 247, 0.4);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status-online { background: var(--accent); box-shadow: 0 0 10px var(--accent-glow); }
+        .status-offline { background: var(--danger); }
+        .status-paused { background: var(--warning); }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-4px);
+        }
+
+        .stat-card.primary { border-color: rgba(0, 212, 170, 0.3); }
+        .stat-card.purple { border-color: rgba(168, 85, 247, 0.3); }
+
+        .chart-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+        }
+
+        .table-row {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            transition: all 0.2s ease;
+        }
+
+        .table-row:hover {
+            border-color: var(--accent);
+        }
+
+        .badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-pending { background: rgba(255, 71, 87, 0.2); color: var(--danger); }
+        .badge-accepted { background: rgba(0, 212, 170, 0.2); color: var(--accent); }
+        .badge-printing { background: rgba(255, 165, 2, 0.2); color: var(--warning); }
+        .badge-ready { background: rgba(0, 212, 170, 0.2); color: var(--accent); }
+        .badge-completed { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .badge-cancelled { background: rgba(255, 71, 87, 0.2); color: var(--danger); }
+
+        .mode-toggle {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 4px;
+        }
+
+        .mode-btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .mode-btn.active {
+            background: var(--accent);
+            color: var(--bg);
+        }
+
+        .quick-action {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            transition: all 0.3s ease;
+        }
+
+        .quick-action:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: var(--border);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+
+        @media (max-width: 640px) {
+            .stat-grid .stat-card {
+                margin-bottom: 16px;
+            }
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+
+    <!-- Header with Quick Stats -->
+    <header class="bg-bg-secondary/90 backdrop-blur border-b border-border sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-[var(--accent)] to-emerald-600 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor">
+                        <path d="M12 15v2m0 0v-2m-6.96 4h13.92a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        <path d="M2 9h4l2 8H2a2 2 0 00-2 2v8a2 2 0 002 2h16a2 2 0 002-2v-8a2 2 0 00-2-2H5a2 2 0 00-2-2V5a2 2 0 00-2-2H2zm10-4h4m4 4V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v8z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold tracking-none">Print Queue</h1>
+                    <p class="text-sm text-muted" id="shopName">ABC Print Center</p>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-4">
+                <!-- Mode Toggle -->
+                <div class="mode-toggle">
+                    <button class="mode-btn active" onclick="setMode('light')">Light</button>
+                    <button class="mode-btn" onclick="setMode('dark')">Dark</button>
+                </div>
+                
+                <button class="btn-primary hidden md:block" onclick="openNewOrder()">New Order</button>
+                
+                <div class="hidden md:flex items-center gap-3">
+                    <span class="text-sm text-muted" id="notificationCount">0</span>
+                    <button onclick="openNotifications()" class="p-2 rounded hover:bg-bg-secondary transition">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor">
+                            <path d="M15 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2-2m7 7v2m0 0v-2m-2-2v-2m2 2v-2m-6-12v2m0 0v-2m2-2v-2m-2 2v-2m6 7v2m0 0v-2m-2-2v-2m2 2v-2"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-6 py-8">
+
+        <!-- Quick Actions -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+            <!-- New Order Card -->
+            <div class="quick-action">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor">
+                            <path d="M12 5v14M5 12h14"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold mb-1">New Order</h3>
+                        <p class="text-xs text-muted">Create a new print order</p>
+                    </div>
+                </div>
+                <div class="p-3">
+                    <svg class="w-5 h-5 text-muted hover:text-accent transition" fill="none" stroke="currentColor">
+                        <path d="M12 5v14M5 12h14"/>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- Search Customer Card -->
+            <div class="quick-action">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 rounded-xl bg-blue-500 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor">
+                            <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold mb-1">Search Customer</h3>
+                        <p class="text-xs text-muted">Find orders by name or phone</p>
+                    </div>
+                </div>
+                <div class="p-3">
+                    <svg class="w-5 h-5 text-muted hover:text-blue-500 transition" fill="none" stroke="currentColor">
+                        <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- Create Manual Order Card -->
+            <div class="quick-action">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 rounded-xl bg-green-500 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor">
+                            <path d="M12 19l9 2-9-2V7a1 1 0 00-1-1h-4a1 1 0 00-1 1v12a1 1 0 001 1h4a1 1 0 001-1z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold mb-1">Manual Order</h3>
+                        <p class="text-xs text-muted">Create order without PDF</p>
+                    </div>
+                </div>
+                <div class="p-3">
+                    <svg class="w-5 h-5 text-muted hover:text-green-500 transition" fill="none" stroke="currentColor">
+                        <path d="M12 19l9 2-9-2V7a1 1 0 00-1-1h-4a1 1 0 00-1 1v12a1 1 0 001 1h4a1 1 0 001-1z"/>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- Open Print Queue Card -->
+            <div class="quick-action">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 rounded-xl bg-cyan-500 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor">
+                            <path d="M8.5 2.5a6 6 0 1110.6 1.6H16m.6 8.4a2.5 2.5 0 110 5H11m0-12a2.5 2.5 0 00-2.5 2.5V11m0 5a2.5 2.5 0 01-2.5 2.5V16"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold mb-1">Print Queue</h3>
+                        <p class="text-xs text-muted">View active print jobs</p>
+                    </div>
+                </div>
+                <div class="p-3">
+                    <svg class="w-5 h-5 text-muted hover:text-cyan-500 transition" fill="none" stroke="currentColor">
+                        <path d="M8.5 2.5a6 6 0 1110.6 1.6H16m.6 8.4a2.5 2.5 0 110 5H11m0-12a2.5 2.5 0 00-2.5 2.5V11m0 5a2.5 2.5 0 01-2.5 2.5V16"/>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- Generate Invoice Card -->
+            <div class="quick-action">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 rounded-xl bg-amber-500 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor">
+                            <path d="M12 2v4m0 4l-2 10M12 2v16m0 0l2 10m-2-10v8m-6-8v8"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold mb-1">Generate Invoice</h3>
+                        <p class="text-xs text-muted">Create invoices for orders</p>
+                    </div>
+                </div>
+                <div class="p-3">
+                    <svg class="w-5 h-5 text-muted hover:text-amber-500 transition" fill="none" stroke="currentColor">
+                        <path d="M12 2v4m0 4l-2 10M12 2v16m0 0l2 10m-2-10v8m-6-8v8"/>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- View Reports Card -->
+            <div class="quick-action">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 rounded-xl bg-red-500 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor">
+                            <path d="M12 7v10M4 12h16M8 12a4 4 0 100-8 4 4 0 000 8z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold mb-1">View Reports</h3>
+                        <p class="text-xs text-muted">Business analytics dashboard</p>
+                    </div>
+                </div>
+                <div class="p-3">
+                    <svg class="w-5 h-5 text-muted hover:text-red-500 transition" fill="none" stroke="currentColor">
+                        <path d="M12 7v10M4 12h16M8 12a4 4 0 100-8 4 4 0 000 8z"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <!-- Branches Section -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+            <!-- Branch Cards -->
+            <div class="glass-card-large p-6">
+                <div class="flex items-center gap-3 mb-6">
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor">
+                            <path d="M12 15v2m0 0v-2m-6.96 4h13.92a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2 class="font-bold">Branch Dashboard</h2>
+                        <p class="text-sm text-muted">Manage print shop branches</p>
+                    </div>
+                </div>
+                
+                <div class="space-y-4">
+                    <div>
+                        <p class="text-sm text-muted mb-2">Branch Name</p>
+                        <p class="font-medium">Main Street Print Shop</p>
+                    </div>
+                    <div>
+                        <p class="text-sm text-muted mb-2">Branch Code</p>
+                        <p class="font-medium">BR001</p>
+                    </div>
+                    <div>
+                        <p class="text-sm text-muted mb-2">Status</p>
+                        <span class="status-dot status-online mr-2"></span>
+                        <span class="text-sm">Online</span>
+                    </div>
+                    <div>
+                        <p class="text-sm text-muted mb-2">Printers</p>
+                        <p class="text-xs text-muted">3 active</p>
+                    </div>
+                    <div>
+                        <p class="text-sm text-muted mb-2">Today's Revenue</p>
+                        <p class="font-medium text-accent">₹2,450.00</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-card-large p-6">
+                <div class="flex items-center gap-3 mb-6">
+                    <div class="w-12 h-12 rounded-xl from-green-600 to-green-800 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor">
+                            <path d="M12 7v10M4 12h16M8 12a4 4 0 100-8 4 4 0 000 8z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2 class="font-bold">Employees</h2>
+                        <p class="text-sm text-muted">Manage shop staff</p>
+                    </div>
+                </div>
+                
+                <div class="space-y-4">
+                    <div>
+                        <p class="text-sm text-muted mb-2">Active Employees</p>
+                        <p class="font-medium">4</p>
+                    </div>
+                    <div>
+                        <p class="text-sm text-muted mb-2">Shifts Today</p>
+                        <p class="font-medium">2</p>
+                    </div>
+                    <div>
+                        <p class="text-sm text-muted mb-2">Performance</p>
+                        <p class="text-xs text-muted">89% on-time</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Printers Management -->
+        <div class="glass-card-large p-6 mb-8">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="font-bold text-lg">Printer Management</h2>
+                <button class="btn-secondary" onclick="openPrinterModal()">Add Printer</button>
+            </div>
+            
+            <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead>
+                        <tr class="text-left text-sm text-muted border-b border-border bg-bg-secondary">
+                            <th class="p-3">Printer Name</th>
+                            <th class="p-3">Model</th>
+                            <th class="p-3">Status</th>
+                            <th class="p-3">Remaining Jobs</th>
+                            <th class="p-3">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="printerTable">
+                        <!-- Printers will be populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Inventory Section -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+            <!-- Inventory Cards -->
+            <div class="glass-card-large p-6">
+                <h2 class="font-bold text-lg mb-6">Inventory Status</h2>
+                
+                <div class="space-y-3">
+                    <div class="glass-card p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-sm text-muted">A4 Paper</span>
+                            <span class="text-sm font-medium">150 sheets</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: 75%"></div>
+                        </div>
+                        <span class="text-xs text-muted">75% used</span>
+                    </div>
+                    
+                    <div class="glass-card p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-sm text-muted">A3 Paper</span>
+                            <span class="text-sm font-medium">80 sheets</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: 50%"></div>
+                        </div>
+                        <span class="text-xs text-muted">50% used</span>
+                    </div>
+                    
+                    <div class="glass-card p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-sm text-muted">Photo Paper</span>
+                            <span class="text-sm font-medium">45 sheets</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: 30%"></div>
+                        </div>
+                        <span class="text-xs text-muted">30% used</span>
+                    </div>
+                    
+                    <div class="glass-card p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-sm text-muted">Ink Cartridges</span>
+                            <span class="text-sm font-medium">3 remaining</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: 60%"></div>
+                        </div>
+                        <span class="text-xs text-muted">60% remaining</span>
+                    </div>
+                    
+                    <div class="glass-card p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-sm text-muted">Toner Cartridges</span>
+                            <span class="text-sm font-medium">2 remaining</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: 40%"></div>
+                        </div>
+                        <span class="text-xs text-muted">40% remaining</span>
+                    </div>
+                    
+                    <div class="glass-card p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-sm text-muted">Spiral Bindings</span>
+                            <span class="text-sm font-medium">25 remaining</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: 80%"></div>
+                        </div>
+                        <span class="text-xs text-muted">80% remaining</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Low Stock Alerts -->
+            <div class="glass-card-large p-6">
+                <h2 class="font-bold text-lg mb-6">Low Stock Alerts</h2>
+                
+                <div class="space-y-3">
+                    <div class="glass-card p-4 bg-bg-secondary">
+                        <div class="flex items-center gap-3">
+                            <div class="w-3 h-3 rounded-full bg-red-500 status-dot status-offline"></div>
+                            <div>
+                                <p class="font-medium text-sm">A3 Paper</p>
+                                <p class="text-xs text-muted">Below minimum stock</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-card p-4 bg-bg-secondary">
+                        <div class="flex items-center gap-3">
+                            <div class="w-3 h-3 rounded-full bg-yellow-500 status-dot"></div>
+                            <div>
+                                <p class="font-medium text-sm">Ink Cartridges</p>
+                                <p class="text-xs text-muted">Approaching minimum</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-card p-4 bg-bg-secondary">
+                        <div class="flex items-center gap-3">
+                            <div class="w-3 h-3 rounded-full bg-green-500 status-dot status-online"></div>
+                            <div>
+                                <p class="font-medium text-sm">Spiral Bindings</p>
+                                <p class="text-xs text-muted">Good stock level</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Orders -->
+        <div class="glass-card-large p-6 mb-8">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="font-bold text-lg">Recent Orders</h2>
+                <button class="btn-secondary text-sm" onclick="openOrdersModal()">View All</button>
+            </div>
+            
+            <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead>
+                        <tr class="text-left text-sm text-muted border-b border-border bg-bg-secondary">
+                            <th class="p-3">Order ID</th>
+                            <th class="p-3">Customer</th>
+                            <th class="p-3">Pages</th>
+                            <th class="p-3">Price</th>
+                            <th class="p-3">Status</th>
+                            <th class="p-3">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ordersTable">
+                        <!-- Orders will be populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Progress Timeline (Bottom) -->
+        <div class="glass-card-large p-8">
+            <h2 class="font-bold text-lg mb-6">Order Progress Timeline</h2>
+            <p class="text-muted mb-6">Real-time status tracking without page refresh</p>
+            
+            <div class="progress-timeline">
+                <div class="timeline-step completed" id="ts-step-1">
+                    <div>Request Received</div>
+                </div>
+                <div class="timeline-step" id="ts-step-2">
+                    <div>Files Verified</div>
+                </div>
+                <div class="timeline-step" id="ts-step-3">
+                    <div>Accepted</div>
+                </div>
+                <div class="timeline-step" id="ts-step-4">
+                    <div>Waiting for Printing</div>
+                </div>
+                <div class="timeline-step" id="ts-step-5">
+                    <div>Printing</div>
+                </div>
+                <div class="timeline-step" id="ts-step-6">
+                    <div>Quality Check</div>
+                </div>
+                <div class="timeline-step" id="ts-step-7">
+                    <div>Ready for Pickup</div>
+                </div>
+                <div class="timeline-step" id="ts-step-8">
+                    <div>Completed</div>
+                </div>
+            </div>
+            
+            <p class="text-right text-sm text-muted mt-6" id="timelineStatus">Current: Waiting</p>
+        </div>
+
+    </main>
+
+    <!-- New Order Modal -->
+    <div id="newOrderModal" class="fixed inset-0 bg-black bg-opacity-80 backdrop-blur z-50 hidden items-center justify-center">
+        <div class="bg-white rounded-xl p-8 w-full max-w-md shadow-2xl transform scale-95 opacity-0 transition-all duration-300" id="modalContent">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6">Create New Order</h2>
+            
+            <form id="newOrderForm">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                    <div>
+                        <label class="block text-sm text-muted mb-2">Customer Name</label>
+                        <input type="text" id="modalCustomerName" class="w-full p-3 border rounded bg-bg-secondary text-focus" placeholder="Customer name">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-muted mb-2">Phone Number</label>
+                        <input type="tel" id="modalCustomerPhone" class="w-full p-3 border rounded bg-bg-secondary text-focus" placeholder="+91 98765 43210">
+                    </div>
+                </div>
+                
+                <div class="mb-6">
+                    <label class="block text-sm text-muted mb-2">Select Files</label>
+                    <input type="file" id="modalPdfFiles" accept=".pdf" multiple class="hidden">
+                    <button type="button" class="btn-secondary w-full text-left mb-2" onclick="document.getElementById('modalPdfFiles').click()">
+                        Browse PDFs
+                    </button>
+                    <p id="modalFileName" class="text-xs text-muted mb-2">No file selected</p>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                    <div>
+                        <label class="block text-sm text-muted mb-2">Print Mode</label>
+                        <div class="space-y-2">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="printMode" value="analyzed" class="w-4 h-4 text-accent" checked>
+                                <span>Print as Analyzed</span>
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="printMode" value="forceBw" class="w-4 h-4 text-accent">
+                                <span>Force All B&W</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-muted mb-2">Payment Method</label>
+                        <div class="space-y-2">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="payMethod" value="UPI" class="w-4 h-4 text-accent" checked>
+                                <span>Pay Now (UPI)</span>
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="payMethod" value="Cash" class="w-4 h-4 text-accent">
+                                <span>Pay at Shop</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mb-6">
+                    <label class="block text-sm text-muted mb-2">Estimated Completion</label>
+                    <input type="time" id="modalEstTime" class="w-full p-3 border rounded bg-bg-secondary text-focus">
+                </div>
+                
+                <div class="flex gap-4">
+                    <button type="button" class="btn-secondary flex-1" onclick="closeNewOrderModal()">Cancel</button>
+                    <button type="submit" class="btn-primary flex-1">Create Order</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Notifications Modal -->
+    <div id="notificationsModal" class="fixed inset-0 bg-black bg-opacity-80 backdrop-blur z-50 hidden items-center justify-center">
+        <div class="bg-white rounded-xl w-full max-w-lg mx-4 max-h-[80vh] overflow-y-auto shadow-2xl transform scale-95 opacity-0 transition-all duration-300" id="modalNav">
+            <div class="p-6 border-b border-border">
+                <h2 class="text-xl font-bold">Notifications</h2>
+                <button onclick="closeNotificationsModal()" class="text-muted ml-auto text-opacity-50 hover:text-focus transition">×</button>
+            </div>
+            <div class="p-6" id="notificationsContent">
+                <!-- Notifications will be loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            // Load printers
+            loadPrinters();
+            
+            // Load recent orders
+            loadRecentOrders();
+            
+            // Setup mode toggle
+            setupModeToggle();
+            
+            // Check for notifications
+            checkNotifications();
+            
+            // Setup timeline animation
+            animateTimeline();
+        });
+
+        // Load printers from API
+        async function loadPrinters() {
+            try {
+                const res = await fetch('http://localhost:8000/printers/status');
+                const data = await res.json();
+                if (data.status === 'success' && data.data) {
+                    renderPrinters(data.data);
+                }
+            } catch (e) {
+                console.error('Error loading printers:', e);
+            }
+        }
+
+        function renderPrinters(printers) {
+            const table = document.getElementById('printerTable');
+            table.innerHTML = '';
+            
+            printers.forEach(printer => {
+                const statusClass = printer.status === 'Online' ? 'status-online' : 
+                                   printer.status === 'Offline' ? 'status-offline' : 'status-paused';
+                
+                table.innerHTML += `
+                    <tr class="table-row">
+                        <td class="p-3 font-medium">${printer.printer_name}</td>
+                        <td class="p-3 text-sm text-muted">${printer.model || 'Standard'}</td>
+                        <td class="p-3">
+                            <span class="status-dot ${statusClass} mr-2"></span>
+                            <span class="text-sm ${statusClass}">${printer.status}</span>
+                        </td>
+                        <td class="p-3 text-sm text-muted">${printer.remaining_jobs || 0} jobs</td>
+                        <td class="p-3">
+                            <button class="text-xs text-accent hover:underline">Manage</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        // Load recent orders
+        async function loadRecentOrders() {
+            try {
+                const res = await fetch('http://localhost:8000/orders/');
+                const data = await res.json();
+                if (data.status === 'success' && data.data) {
+                    renderOrders(data.data.slice(0, 8));
+                }
+            } catch (e) {
+                console.error('Error loading orders:', e);
+            }
+        }
+
+        function renderOrders(orders) {
+            const table = document.getElementById('ordersTable');
+            table.innerHTML = '';
+            
+            orders.forEach(order => {
+                const statusClasses = {
+                    'Waiting': 'badge-pending',
+                    'Accepted': 'badge-accepted',
+                    'Printing': 'badge-printing',
+                    'Ready for Pickup': 'badge-ready',
+                    'Completed': 'badge-completed',
+                    'Cancelled': 'badge-cancelled'
+                };
+                
+                table.innerHTML += `
+                    <tr class="table-row">
+                        <td class="p-3 font-mono text-sm">${order.order_id}</td>
+                        <td class="p-3 font-medium truncate" style="max-width: 120px;">${order.filename || 'N/A'}</td>
+                        <td class="p-3">
+                            <span class="text-xs text-muted">${order.bw_pages || 0}</span> B&W /
+                            <span class="text-xs text-accent">${order.color_pages || 0}</span> Color
+                        </td>
+                        <td class="p-3 font-bold">₹${order.total_price || 0}</td>
+                        <td class="p-3">
+                            <span class="badge ${statusClasses[order.order_status] || 'badge-pending'}">${order.order_status}</span>
+                        </td>
+                        <td class="p-3">
+                            <button class="text-xs text-accent hover:underline">View</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        // Mode toggle
+        function setupModeToggle() {
+            const modeBtns = document.querySelectorAll('.mode-btn');
+            
+            modeBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    modeBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                });
+            });
+        }
+
+        // Animate timeline
+        function animateTimeline() {
+            const steps = document.querySelectorAll('.timeline-step');
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.style.opacity = '1';
+                        entry.target.style.transform = 'translateX(0)';
+                    }
+                });
+            }, { threshold: 0.3 });
+
+            steps.forEach(step => {
+                step.style.opacity = '0';
+                step.style.transform = 'translateX(-20px)';
+                step.style.transition = 'all 0.5s ease';
+                observer.observe(step);
+            });
+        }
+
+        // Check notifications
+        async function checkNotifications() {
+            try {
+                const res = await fetch('http://localhost:8000/notifications/customer/1');
+                const data = await res.json();
+                if (data.status === 'success' && data.data) {
+                    const countEl = document.getElementById('notificationCount');
+                    countEl.textContent = data.data.length;
+                    
+                    if (data.data.length > 0) {
+                        // Show notification count badge
+                        countEl.classList.add('relative');
+                        countEl.innerHTML = `<span class="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-w-full w-5 h-5 flex items-center justify-center">${
+                            data.data.length > 99 ? '99+' : data.data.length
+                        }</span>${countEl.textContent}`;
+                    }
+                }
+            } catch (e) {
+                console.error('Error checking notifications:', e);
+            }
+        }
+
+        // Quick action handlers
+        function openNewOrder() {
+            document.getElementById('newOrderModal').classList.remove('hidden');
+            document.getElementById('newOrderModal').classList.add('flex');
+            setTimeout(() => {
+                document.getElementById('modalContent').style.transform = 'scale(1)';
+                document.getElementById('modalContent').style.opacity = '1';
+            }, 10);
+        }
+
+        function closeNewOrderModal() {
+            const modal = document.getElementById('newOrderModal');
+            const content = document.getElementById('modalContent');
+            content.style.transform = 'scale(0.95)';
+            content.style.opacity = '0';
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            }, 300);
+        }
+
+        function openNotifications() {
+            document.getElementById('notificationsModal').classList.remove('hidden');
+            document.getElementById('notificationsModal').classList.add('flex');
+            loadNotifications();
+        }
+
+        function closeNotificationsModal() {
+            const modal = document.getElementById('notificationsModal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        async function loadNotifications() {
+            try {
+                const res = await fetch('http://localhost:8000/notifications/owner/1');
+                const data = await res.json();
+                if (data.status === 'success' && data.data) {
+                    renderNotifications(data.data);
+                }
+            } catch (e) {
+                console.error('Error loading notifications:', e);
+            }
+        }
+
+        function renderNotifications(notifications) {
+            const content = document.getElementById('notificationsContent');
+            
+            if (notifications.length === 0) {
+                content.innerHTML = '<p class="text-center text-muted py-8">No new notifications</p>';
+                return;
+            }
+            
+            content.innerHTML = notifications.map(notif => `
+                <div class="glass-card p-4 mb-3">
+                    <p class="font-medium text-sm">${notif.message}</p>
+                    <p class="text-xs text-muted">${new Date(notif.created_at).toLocaleString()}</p>
+                </div>
+            `).join('');
+        }
+    </script>
+</body>
+</html>
