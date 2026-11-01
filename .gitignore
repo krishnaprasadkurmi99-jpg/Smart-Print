@@ -10,3 +10,5 @@ frontend/dist/
 uploads/*
 qrcodes/*
 .vscode/
+
+PRODUCTION-READINESS-AUDIT.md
